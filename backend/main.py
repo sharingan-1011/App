@@ -50,6 +50,7 @@ from backend.db import (
 from backend.tools.repl import clear_repl
 from backend.tools.subagent import PENDING_SPECIALIST_APPROVALS
 from backend.tools.scheduler import run_scheduler_loop
+from backend.tools.search_skills import SKILL_REGISTRY
 
 
 @asynccontextmanager
@@ -115,6 +116,17 @@ async def get_session_blackboard(session_id: str):
 @app.get("/sessions/{session_id}/scheduled_tasks")
 async def get_scheduled_tasks(session_id: str):
     return await list_scheduled_tasks(session_id)
+
+
+@app.get("/skills")
+async def list_skills():
+    """
+    Read-only listing of Tier-3 SKILL_REGISTRY entries, for the
+    frontend's '/' skill picker (app.html). Browsing this list doesn't
+    unlock anything — a skill only becomes callable once the model
+    itself calls search_skills and matches it (backend/agent.py).
+    """
+    return [{"name": name, "description": tool.description} for name, tool in SKILL_REGISTRY.items()]
 
 
 class RenameRequest(BaseModel):

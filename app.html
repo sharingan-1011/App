@@ -84,7 +84,7 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
   font-size: 11px; color: var(--muted);
   background: var(--surface2); padding: 3px 8px; border-radius: 20px;
 }
-#messages { flex: 1; overflow-y: auto; padding: 24px 0; scroll-behavior: smooth; }
+#messages { flex: 1; overflow-y: auto; padding: 24px 0; scroll-behavior: smooth; position: relative; }
 #messages::-webkit-scrollbar { width: 5px; }
 #messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 .msg-row { max-width: 820px; margin: 0 auto 28px; padding: 0 24px; }
@@ -311,6 +311,59 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 .btn-deny    { background: rgba(248,81,73,.1);  border-color: rgba(248,81,73,.35); color: var(--red); }
 .btn-reassign { background: rgba(124,106,247,.1); border-color: rgba(124,106,247,.35); color: var(--accent); }
 .approval-resolved { padding: 8px 12px; font-size: 11.5px; color: var(--muted); font-style: italic; }
+
+/* ── sidebar search + grouping ───────────────────────────────────────── */
+#session-search-wrap { margin: 0 10px 10px; position: relative; }
+#session-search {
+  width: 100%; box-sizing: border-box; background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 7px 10px 7px 28px; color: #ccc; font-size: 12.5px; font-family: var(--font);
+}
+#session-search::placeholder { color: var(--muted); }
+#session-search-wrap svg { position: absolute; left: 9px; top: 8px; pointer-events: none; }
+.session-group-label {
+  font-size: 10.5px; font-weight: 700; letter-spacing: .6px; color: #555;
+  text-transform: uppercase; padding: 10px 10px 4px;
+}
+
+/* ── tool-tier badges ─────────────────────────────────────────────────── */
+.tool-tier { font-size: 9px; font-weight: 700; letter-spacing: .04em; padding: 1.5px 6px; border-radius: 4px; margin-left: 2px; }
+.tool-tier.core  { color: var(--green);  background: rgba(63,185,80,.12); }
+.tool-tier.heavy { color: var(--yellow); background: rgba(210,153,34,.12); }
+.tool-tier.skill { color: var(--accent); background: var(--accent-lo); }
+
+/* ── distinct cancelled/denied/error states ──────────────────────────── */
+.state-banner {
+  display: flex; align-items: center; gap: 8px; margin: 8px 0;
+  padding: 9px 12px; border-radius: 9px; font-size: 12.5px;
+}
+.state-banner.error     { background: rgba(248,81,73,.08); border: 1px solid rgba(248,81,73,.3); color: #f0a39e; }
+.state-banner.cancelled { background: rgba(210,153,34,.08); border: 1px solid rgba(210,153,34,.3); color: #e3c98a; }
+.state-banner.denied    { background: rgba(248,81,73,.06); border: 1px solid rgba(248,81,73,.25); color: #f0a39e; }
+.state-banner svg { flex-shrink: 0; }
+
+/* ── slash-skill picker ──────────────────────────────────────────────── */
+#skill-picker {
+  display: none; margin-bottom: 8px; background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 10px; padding: 6px; max-height: 160px; overflow-y: auto;
+}
+#skill-picker.visible { display: block; }
+#skill-picker .sp-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; padding: 4px 8px 2px; }
+.sp-item {
+  display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 12.5px;
+}
+.sp-item:hover, .sp-item.sel { background: var(--surface); }
+.sp-item .sp-name { font-family: var(--mono); color: var(--text); }
+.sp-item .sp-desc { color: var(--muted); font-size: 11px; margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
+
+/* ── drag-and-drop upload ────────────────────────────────────────────── */
+#drop-zone {
+  display: none; position: absolute; inset: 0; background: rgba(124,106,247,.08);
+  border: 2px dashed var(--accent); border-radius: var(--radius); z-index: 20;
+  align-items: center; justify-content: center; flex-direction: column; gap: 8px; color: var(--accent);
+  font-size: 13px; font-weight: 600; pointer-events: none;
+}
+#drop-zone.active { display: flex; }
+#messages.drag-over #drop-zone { display: flex; }
 </style>
 </head>
 <body>
@@ -321,6 +374,10 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
       New chat
     </button>
+    <div id="session-search-wrap">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#666" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input id="session-search" placeholder="Search chats…">
+    </div>
     <div id="session-list"></div>
   </div>
 
@@ -350,8 +407,13 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
         <div class="big">⚡</div>
         <div class="tagline">C137 is ready. Ask anything.</div>
       </div>
+      <div id="drop-zone">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
+        Drop a file to attach it
+      </div>
     </div>
     <div id="input-area">
+      <div id="skill-picker"></div>
       <div id="attach-bar">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
         <span id="attach-name">file.txt</span>
@@ -363,7 +425,7 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
           </button>
           <input type="file" id="file-input">
-          <textarea id="msg-input" rows="1" placeholder="Message C137…"></textarea>
+          <textarea id="msg-input" rows="1" placeholder="Message C137…  (/ for skills)"></textarea>
         </div>
         <button id="send-btn" title="Send (Enter)">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
@@ -422,6 +484,9 @@ const msgInput    = document.getElementById('msg-input');
 const sendBtn     = document.getElementById('send-btn');
 const stopBtn     = document.getElementById('stop-btn');
 const sessionList = document.getElementById('session-list');
+const sessionSearch = document.getElementById('session-search');
+sessionSearch.addEventListener('input', () => renderSidebar());
+const skillPicker = document.getElementById('skill-picker');
 const messagesEl  = document.getElementById('messages');
 const emptyEl     = document.getElementById('empty');
 const topbarTitle = document.getElementById('topbar-title');
@@ -554,9 +619,34 @@ async function loadSessions() {
 }
 // ───────────────────────────────────────────────────────────────
 
+function sessionGroupLabel(s) {
+  const ts = (s.updated ?? s.created);
+  if (!ts) return 'Earlier';
+  const d = new Date(ts * 1000);
+  const now = new Date();
+  const startOfDay = x => new Date(x.getFullYear(), x.getMonth(), x.getDate());
+  const diffDays = Math.round((startOfDay(now) - startOfDay(d)) / 86400000);
+  if (diffDays <= 0) return 'Today';
+  if (diffDays === 1) return 'Yesterday';
+  return 'Earlier';
+}
+
 function renderSidebar() {
   sessionList.innerHTML = '';
-  sessions.slice().reverse().forEach(s => {
+  const query = (sessionSearch.value || '').trim().toLowerCase();
+  const filtered = sessions.filter(s => !query || (s.title || 'New Chat').toLowerCase().includes(query));
+  const ordered = filtered.slice().reverse();
+
+  let lastGroup = null;
+  ordered.forEach(s => {
+    const group = sessionGroupLabel(s);
+    if (group !== lastGroup) {
+      const label = document.createElement('div');
+      label.className = 'session-group-label';
+      label.textContent = group;
+      sessionList.appendChild(label);
+      lastGroup = group;
+    }
     const item = document.createElement('div');
     item.className = 'session-item' + (s.id === currentSessionId ? ' active' : '');
     item.dataset.id = s.id;
@@ -702,17 +792,30 @@ function createStreamRow() {
   return { row, thinkBlock, bubble };
 }
 
+// Mirrors backend/tools/__init__.py's GATED_TOOLS and
+// search_skills.py's SKILL_REGISTRY — purely a display label, the
+// backend is the actual source of truth for what's gated.
+const HEAVY_TOOLS = new Set(['shell_exec', 'fs_write', 'fs_delete', 'repl_run', 'browser_action', 'computer_action']);
+const SKILL_TOOLS  = new Set(['uuid_gen']);
+function toolTier(name) {
+  if (HEAVY_TOOLS.has(name)) return 'heavy';
+  if (SKILL_TOOLS.has(name)) return 'skill';
+  return 'core';
+}
+
 function buildToolCard(callId, name, args) {
   const card = document.createElement('div');
   card.className = 'tool-card';
   card.id = `tc-${callId}`;
 
+  const tier = toolTier(name);
   const header = document.createElement('div');
   header.className = 'tool-header';
   header.innerHTML = `
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
     <span style="color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em;">tool</span>
     <span style="color:var(--text);font-weight:600;">${escHtml(name)}</span>
+    <span class="tool-tier ${tier}">${tier.toUpperCase()}</span>
     <span class="tool-badge running" id="badge-${callId}">RUNNING</span>`;
   header.addEventListener('click', () => card.classList.toggle('open'));
 
@@ -923,9 +1026,16 @@ function handleEvent(ctx, ev) {
   else if (ev.type === 'tool_result') {
     const badge     = document.getElementById(`badge-${ev.call_id}`);
     const resultSec = document.getElementById(`tr-${ev.call_id}`);
-    let isErr = false;
-    try { if (JSON.parse(ev.output || '{}').error) isErr = true; } catch {}
-    if (badge)     { badge.className = `tool-badge ${isErr?'err':'ok'}`; badge.textContent = isErr?'ERR':'OK'; }
+    let isErr = false, isDenied = false;
+    try {
+      const parsed = JSON.parse(ev.output || '{}');
+      if (parsed.error) isErr = true;
+      if (/denied by user/i.test(parsed.error || '')) isDenied = true;
+    } catch {}
+    if (badge) {
+      badge.className = `tool-badge ${isDenied ? 'err' : isErr ? 'err' : 'ok'}`;
+      badge.textContent = isDenied ? 'DENIED' : isErr ? 'ERR' : 'OK';
+    }
     if (resultSec) { resultSec.innerHTML = `<div class="label">Output</div>${formatToolOutput(ev.name, ev.output||'{}')}`; }
     scrollBottom();
   }
@@ -982,7 +1092,7 @@ function handleEvent(ctx, ev) {
   else if (ev.type === 'blackboard_entry') {
     renderBlackboardEntry(ev);
   }
-  else if (ev.type === 'done' || ev.type === 'cancelled') {
+  else if (ev.type === 'done') {
     if (ctx.cursor) ctx.cursor.remove();
     bubble.innerHTML = marked.parse(ctx.deltaBuf || '');
     bubble.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));
@@ -993,9 +1103,23 @@ function handleEvent(ctx, ev) {
     loadSessions();
     scrollBottom();
   }
+  else if (ev.type === 'cancelled') {
+    if (ctx.cursor) ctx.cursor.remove();
+    bubble.innerHTML = marked.parse(ctx.deltaBuf || '');
+    const banner = document.createElement('div');
+    banner.className = 'state-banner cancelled';
+    banner.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="4" y="4" width="16" height="16" rx="2"/></svg> Stopped before finishing`;
+    row.appendChild(banner);
+    loadSessions();
+    scrollBottom();
+  }
   else if (ev.type === 'error') {
     if (ctx.cursor) ctx.cursor.remove();
-    bubble.innerHTML = `<span style="color:var(--red)">⚠ ${escHtml(ev.detail || 'Unknown error')}</span>`;
+    const banner = document.createElement('div');
+    banner.className = 'state-banner error';
+    banner.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg> ${escHtml(ev.detail || 'Unknown error')}`;
+    row.appendChild(banner);
+    scrollBottom();
   }
 }
 
@@ -1072,11 +1196,7 @@ async function send() {
 
 stopBtn.addEventListener('click', () => { if (abortController) abortController.abort(); });
 
-attachBtn.addEventListener('click', () => fileInput.click());
-fileInput.addEventListener('change', async () => {
-  const file = fileInput.files[0];
-  if (!file) return;
-  fileInput.value = '';
+async function uploadFile(file) {
   const fd = new FormData();
   fd.append('file', file);
   try {
@@ -1086,6 +1206,13 @@ fileInput.addEventListener('change', async () => {
     attachName.textContent = data.name;
     attachBar.classList.add('visible');
   } catch (err) { alert('Upload failed: ' + err); }
+}
+
+attachBtn.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', () => {
+  const file = fileInput.files[0];
+  fileInput.value = '';
+  if (file) uploadFile(file);
 });
 
 function clearAttach() {
@@ -1095,9 +1222,72 @@ function clearAttach() {
 }
 attachClear.addEventListener('click', clearAttach);
 
+// ── drag-and-drop upload ────────────────────────────────────────────────
+let dragDepth = 0;
+messagesEl.addEventListener('dragenter', e => {
+  e.preventDefault();
+  dragDepth++;
+  messagesEl.classList.add('drag-over');
+});
+messagesEl.addEventListener('dragover', e => e.preventDefault());
+messagesEl.addEventListener('dragleave', () => {
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0) messagesEl.classList.remove('drag-over');
+});
+messagesEl.addEventListener('drop', e => {
+  e.preventDefault();
+  dragDepth = 0;
+  messagesEl.classList.remove('drag-over');
+  const file = e.dataTransfer?.files?.[0];
+  if (file) uploadFile(file);
+});
+
+// ── slash-skill picker ──────────────────────────────────────────────────
+// Fetched from GET /skills — backend/tools/search_skills.py's
+// SKILL_REGISTRY. Purely a discoverability aid in the UI — the model
+// still has to call search_skills itself for a skill to actually
+// become usable; picking one here just drops its name into the
+// message as a nudge.
+let SKILLS_INFO = [];
+(async () => {
+  try {
+    const res = await fetch(`${API}/skills`);
+    SKILLS_INFO = await res.json();
+  } catch { /* picker just stays empty if this fails */ }
+})();
+
+function renderSkillPicker(filterText) {
+  const q = filterText.toLowerCase();
+  const matches = SKILLS_INFO.filter(s => s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q));
+  if (!matches.length) { skillPicker.classList.remove('visible'); return; }
+
+  skillPicker.innerHTML = `<div class="sp-label">Skills matching "${escHtml(filterText)}"</div>`;
+  matches.forEach(s => {
+    const item = document.createElement('div');
+    item.className = 'sp-item';
+    item.innerHTML = `<span class="sp-name">${escHtml(s.name)}</span><span class="sp-desc">${escHtml(s.description)}</span>`;
+    item.addEventListener('click', () => {
+      const atSlash = msgInput.value.lastIndexOf('/');
+      msgInput.value = (atSlash >= 0 ? msgInput.value.slice(0, atSlash) : msgInput.value) + s.name + ' ';
+      skillPicker.classList.remove('visible');
+      msgInput.focus();
+    });
+    skillPicker.appendChild(item);
+  });
+  skillPicker.classList.add('visible');
+}
+
 msgInput.addEventListener('input', () => {
   msgInput.style.height = '44px';
   msgInput.style.height = Math.min(msgInput.scrollHeight, 160) + 'px';
+
+  const slashIdx = msgInput.value.lastIndexOf('/');
+  const afterSlash = slashIdx >= 0 ? msgInput.value.slice(slashIdx + 1) : null;
+  if (afterSlash !== null && !afterSlash.includes(' ') && (slashIdx === 0 || msgInput.value[slashIdx - 1] === ' ' || msgInput.value[slashIdx - 1] === '\n')) {
+    renderSkillPicker(afterSlash);
+  } else {
+    skillPicker.classList.remove('visible');
+  }
 });
 msgInput.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
 sendBtn.addEventListener('click', send);
