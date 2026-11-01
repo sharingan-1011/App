@@ -14,14 +14,17 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "aiosqlite>=0.20",
     "python-dotenv>=1.0",
-    # LangChain (Phase 1 — plain LLM; Phase 3 swap to LangGraph)
-    "langchain>=0.3",
-    "langchain-openai>=0.2",
-    # OpenAI SDK (used directly in llm.py)
+    # Phase 3 integration: the real LangGraph/LangChain agent loop
+    # (backend/agent.py's StateGraph, backend/llm.py's ChatOpenAI client,
+    # backend/tools/__init__.py's StructuredTool wrappers). Pinned exact
+    # so this doesn't quietly drift back into "declared but unused" the
+    # way the old bare "langchain" / "langgraph>=0.2" lines did.
+    "langgraph==1.2.19",
+    "langchain-core==1.7.3",
+    "langchain-openai==1.7.3",
+    # openai: no longer imported directly — kept pinned as the
+    # transitive dependency langchain-openai actually uses.
     "openai>=1.50",
-    # Streamlit UI
-    "streamlit>=1.38",
-    "sseclient-py>=1.8",
     "requests>=2.32",
 ]
 
