@@ -1,71 +1,43 @@
 """
-agent.py — LangGraph ReAct agent loop with live token streaming.
+agent.py — LangGraph ReAct agent loop with live token streaming, the
+approval gate, and session-scoped subagent deployment.
 
-Phase 3 integration
-────────────────────
-This replaces the hand-written ReAct loop with a real LangGraph
-StateGraph (langchain_openai.ChatOpenAI + LangChain StructuredTool
-instances), while preserving the external contract exactly:
-  - same SSE event shapes (thinking | delta | tool_start | tool_result |
-    done | cancelled | error)
-  - _ThinkParser kept verbatim (7-char "<think>" / 8-char "</think>"
-    exact-match windows, no tolerance added)
-  - tool calls still executed SEQUENTIALLY, never in parallel
-  - the ReAct budget is still effectively 12 model calls
-  - cancel_event still stops the run and yields exactly one "cancelled"
-  - only the final plain-text answer is persisted (main.py does that,
-    unchanged, by accumulating "delta" events)
+Architecture note — why "tools" handles exactly ONE call per node
+invocation, not a loop over all of them
+────────────────────────────────────────────────────────────────────
+LangGraph resumes a paused node by re-running its function from the
+top, replaying earlier state via the checkpoint — it does NOT resume
+mid-function. Verified directly against this app's installed
+langgraph (1.2.19): a node that loops over several tool calls and
+calls interrupt() partway through would re-execute every earlier
+call's side effects a second time on resume. Confirmed by a scripted
+probe before writing this: with each tool call as its own node
+invocation (looping back to "tools" via a conditional edge until
+`pending_tool_calls` is empty), a 3-call sequence with the middle call
+gated executes call 1 once, pauses, and on resume executes call 2 and
+call 3 exactly once each — no duplication. That one-call-per-invocation
+shape is required for the approval gate to be safe, and is the one
+real contract change from the earlier LangGraph migration (Stage A),
+which had no approval gate and could safely loop over every call in
+one node execution.
 
-No approval gate, no parallel tool execution, no checkpointing, and no
-persistence of individual tool calls are added here — those are
-separate, later changes.
+Two different approval mechanisms, by design
+────────────────────────────────────────────────────────────────────
+C137's OWN gated calls pause via this module's checkpointed
+interrupt()/Command(resume=...) — the graph genuinely halts, and the
+original /chat connection closes until POST /sessions/{id}/approve
+opens a new one that resumes it (main.py).
 
-Behaviour-change note (called out per the migration guardrails;
-verified by actually running both cases against a scripted mock
-model, not guessed from reading)
-─────────────────────────────────────────────────────────────────
-The old code manually accumulated each tool call's raw JSON argument
-string and fell back to `{}` on `json.JSONDecodeError`:
-
-    try:
-        args = json.loads(tc["args_str"] or "{}")
-    except json.JSONDecodeError:
-        args = {}
-
-...so a malformed-args tool call still RAN, just with no arguments.
-
-LangChain's tool-call reconstruction is actually more lenient than
-that in one respect and less visible in another:
-
-  - Plain truncation (a tag cut mid-string, e.g. `{"path": "forge.db`
-    with a missing closing quote/brace) is silently REPAIRED by
-    langchain_core's partial-JSON parser — confirmed directly:
-    `parse_partial_json('{"path": "forge.db')` returns
-    `{'path': 'forge.db'}`. This is strictly better than the old
-    `{}`-fallback, which would have discarded the partial path.
-
-  - Genuinely invalid JSON (e.g. the literal text `not json at all`)
-    is NOT retried as `{}` and does NOT raise out of
-    `model.ainvoke(...)` either. Confirmed by direct inspection: the
-    resulting AIMessage puts that call in `.invalid_tool_calls`
-    (`[{'name': 'fs_read', 'args': 'not json at all', 'error': None,
-    ...}]`) and leaves `.tool_calls` EMPTY. `_route_tools` only looks
-    at `.tool_calls`, so this call is silently dropped — no
-    `tool_start`/`tool_result`, no error, no text — the turn just
-    ends with "done" and nothing else happened. This is a real,
-    separate behaviour change: the old code at least ran something
-    visible; this silently does nothing. Flagging it as a known gap
-    for a follow-up fix (e.g. `_route_tools`/`_tools_node` could also
-    walk `ai_message.invalid_tool_calls` and surface each as a
-    visible tool_result-shaped error) rather than patching it inside
-    this migration, since doing it safely means not breaking the
-    next turn's tool_call_id/tool-message pairing contract with the
-    upstream API — a change worth its own review, not a one-line fix
-    made under this task's time box.
+A SPECIALIST's gated call (inside spawn_subagent, backend/tools/
+subagent.py) uses a separate, simpler asyncio.Event-based pause — see
+that module's docstring for why nesting a second checkpointed
+interrupt there was deliberately avoided.
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import uuid
 from typing import Annotated, AsyncGenerator, TypedDict
 
 from langchain_core.callbacks import adispatch_custom_event
@@ -73,11 +45,17 @@ from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolM
 from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
+from langgraph.types import Command, interrupt
 
+from backend.checkpointer import get_checkpointer
+from backend.config import APPROVAL_TIMEOUT_SECONDS
+from backend.db import append_message, get_session_config
 from backend.llm import get_model
-from backend.tools import TOOL_REGISTRY, TOOLS
+from backend.tools import GATED_TOOLS, TOOL_REGISTRY, TOOLS
+from backend.tools.blackboard import make_blackboard_tool
+from backend.tools.subagent import make_spawn_subagent_tool
 
-SYSTEM_PROMPT = """You are C137, a capable agentic AI assistant with access to tools.
+BASE_SYSTEM_PROMPT = """You are C137, a capable agentic AI assistant with access to tools.
 
 When you need to reason before acting, wrap your thoughts in <think>…</think>.
 After reasoning, either call a tool or respond directly to the user.
@@ -89,29 +67,39 @@ Guidelines:
 - Never guess file contents — use fs_read.
 - Format responses clearly using markdown — use headers, bullet lists, bold, and code blocks where appropriate.
 - Be concise and direct in your final response.
-- Use uuid_gen only when a new, unique identifier is actually needed (e.g. naming a new record); never call it just to decorate a response.
+- Use uuid_gen only when a new, unique identifier is actually needed; never call it just to decorate a response.
+- Post important findings, decisions, blockers, or context to the shared blackboard with blackboard_post so other agents and the user can see them without digging through tool-call history.
 """
 
+DEPLOYED_SYSTEM_PROMPT_ADDENDUM = """
+Subagents are deployed this session: {specialists}. You are planner-first —
+prefer delegating a task to the specialist whose scope fits it via
+spawn_subagent, running multiple specialists in parallel when a turn needs
+more than one. If no active specialist's scope fits a task, handle it
+yourself directly with your own full toolset rather than forcing a bad
+match or blocking.
+"""
+
+# Pending C137-level graph interrupts, by call_id. Populated when this
+# module's stream_agent/resume_agent detects a paused graph; consumed
+# by main.py's POST /sessions/{id}/approve. In-memory, lost on restart —
+# same tradeoff as cancel_event elsewhere in this app.
+PENDING_GRAPH_APPROVALS: dict[str, dict] = {}
+
+
 # ── incremental <think> tag parser ────────────────────────────────────────────
-# Tracks streaming state across token chunks so we can emit thinking vs
-# response events live without waiting for the full buffer.
-# Kept verbatim from the pre-migration implementation — do not change the
-# 7-char / 8-char exact-match windows, and do not add case/whitespace
-# tolerance.
+# Kept verbatim from the pre-approval-gate implementation — do not change
+# the 7-char / 8-char windows (see the Stage A migration notes: this
+# matches the ORIGINAL, pre-migration FORGE code's matching behaviour,
+# bug-for-bug, including a verified pre-existing defect in the closing
+# "</think>" match — see the migration's git history for details).
 
 class _ThinkParser:
-    """
-    Feed tokens one at a time; get back labelled segments.
-    States: RESPONSE | IN_THINK | DRAINING_CLOSE
-    """
     def __init__(self):
         self._state   = "RESPONSE"   # "RESPONSE" | "IN_THINK"
-        self._partial = ""           # accumulates partial tag chars
+        self._partial = ""
 
     def feed(self, token: str) -> list[tuple[str, str]]:
-        """
-        Returns list of (label, text) where label ∈ {"thinking","delta"}.
-        """
         out: list[tuple[str, str]] = []
         i = 0
         while i < len(token):
@@ -120,7 +108,6 @@ class _ThinkParser:
                 if ch == "<":
                     self._partial = "<"
                     i += 1
-                    # consume ahead to see if this is <think>
                     while i < len(token) and len(self._partial) < 7:
                         self._partial += token[i]
                         i += 1
@@ -128,7 +115,7 @@ class _ThinkParser:
                         self._state   = "IN_THINK"
                         self._partial = ""
                     elif "<think>".startswith(self._partial):
-                        pass  # still accumulating — will resolve next chunk
+                        pass
                     else:
                         out.append(("delta", self._partial))
                         self._partial = ""
@@ -146,7 +133,7 @@ class _ThinkParser:
                         self._state   = "RESPONSE"
                         self._partial = ""
                     elif "</think>".startswith(self._partial):
-                        pass  # still accumulating
+                        pass
                     else:
                         out.append(("thinking", self._partial))
                         self._partial = ""
@@ -156,7 +143,6 @@ class _ThinkParser:
         return out
 
     def flush(self) -> list[tuple[str, str]]:
-        """Emit any leftover partial tag as the appropriate type."""
         if self._partial:
             label = "thinking" if self._state == "IN_THINK" else "delta"
             out = [(label, self._partial)]
@@ -169,108 +155,108 @@ class _ThinkParser:
 
 class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
+    pending_tool_calls: list[dict]
 
 
-# ── nodes ─────────────────────────────────────────────────────────────────────
+# ── per-turn tool/model setup ───────────────────────────────────────────────
 
-async def _agent_node(state: AgentState) -> dict:
-    model = get_model().bind_tools(TOOLS)
-    ai_message = await model.ainvoke(state["messages"])
-    return {"messages": [ai_message]}
-
-
-async def _tools_node(state: AgentState) -> dict:
+async def _build_turn_tools(session_id: str) -> tuple[list, dict, str]:
     """
-    Executes every tool call on the last AIMessage SEQUENTIALLY (never
-    asyncio.gather, never a parallel ToolNode), emitting a "tool_start"
-    custom event before each call and a "tool_result" custom event
-    after — picked up by stream_agent's astream_events loop and
-    translated 1:1 into the existing SSE contract.
+    Returns (tools, tool_registry, system_prompt) for this session —
+    solo mode gets the base roster + blackboard; deployed mode also
+    gets spawn_subagent, scoped to that session's active_specialists.
     """
-    ai_message = state["messages"][-1]
-    tool_messages: list[ToolMessage] = []
+    cfg = await get_session_config(session_id)
+    blackboard_tool = make_blackboard_tool(session_id, "C137")
+    tools = [*TOOLS, blackboard_tool]
+    registry = {**TOOL_REGISTRY, blackboard_tool.name: blackboard_tool}
+    system_prompt = BASE_SYSTEM_PROMPT
 
-    for tc in ai_message.tool_calls:
-        call_id = tc["id"]
-        name    = tc["name"]
-        args    = tc["args"]
+    if cfg["subagents_enabled"] and cfg["active_specialists"]:
+        spawn_tool = make_spawn_subagent_tool(
+            session_id=session_id,
+            active_specialists=cfg["active_specialists"],
+            tool_registry=TOOL_REGISTRY,
+            get_model=get_model,
+            gated_tools=GATED_TOOLS,
+        )
+        tools.append(spawn_tool)
+        registry[spawn_tool.name] = spawn_tool
+        system_prompt += DEPLOYED_SYSTEM_PROMPT_ADDENDUM.format(specialists=", ".join(cfg["active_specialists"]))
 
-        await adispatch_custom_event("tool_start", {"call_id": call_id, "name": name, "args": args})
+    return tools, registry, system_prompt
 
-        tool = TOOL_REGISTRY.get(name)
-        if tool is None:
-            output = json.dumps({"error": f"Unknown tool: {name}"})
+
+def _build_graph(tools: list, tool_registry: dict, checkpointer):
+    async def agent_node(state: AgentState) -> dict:
+        model = get_model().bind_tools(tools)
+        ai_message = await model.ainvoke(state["messages"])
+        pending = ai_message.tool_calls if isinstance(ai_message, AIMessage) else []
+        return {"messages": [ai_message], "pending_tool_calls": pending}
+
+    async def tools_node(state: AgentState) -> dict:
+        pending = state["pending_tool_calls"]
+        if not pending:
+            return {}
+        tc, *rest = pending
+        call_id, name, args = tc["id"], tc["name"], tc["args"]
+
+        if name in GATED_TOOLS:
+            decision = interrupt({"call_id": call_id, "name": name, "args": args})
         else:
-            try:
-                result = await tool.ainvoke(args)
-                output = json.dumps(result, ensure_ascii=False)
-            except Exception as exc:
-                output = json.dumps({"error": str(exc)})
+            decision = {"decision": "approve"}
 
-        await adispatch_custom_event("tool_result", {"call_id": call_id, "name": name, "output": output})
+        if decision.get("decision") != "approve":
+            output = json.dumps({"ok": False, "error": "Denied by user (or timed out waiting for approval)."})
+        else:
+            await adispatch_custom_event("tool_start", {"call_id": call_id, "name": name, "args": args})
+            tool = tool_registry.get(name)
+            if tool is None:
+                output = json.dumps({"error": f"Unknown tool: {name}"})
+            else:
+                try:
+                    result = await tool.ainvoke(args)
+                    output = json.dumps(result, ensure_ascii=False)
+                except Exception as exc:
+                    output = json.dumps({"error": str(exc)})
+            await adispatch_custom_event("tool_result", {"call_id": call_id, "name": name, "output": output})
 
-        tool_messages.append(ToolMessage(content=output, tool_call_id=call_id, name=name))
+        tm = ToolMessage(content=output, tool_call_id=call_id, name=name)
+        return {"messages": [tm], "pending_tool_calls": rest}
 
-    return {"messages": tool_messages}
+    def route_after_agent(state: AgentState) -> str:
+        return "tools" if state["pending_tool_calls"] else END
 
+    def route_after_tools(state: AgentState) -> str:
+        return "tools" if state["pending_tool_calls"] else "agent"
 
-def _route_tools(state: AgentState) -> str:
-    last = state["messages"][-1]
-    if isinstance(last, AIMessage) and last.tool_calls:
-        return "tools"
-    return END
-
-
-def _build_graph():
     builder = StateGraph(AgentState)
-    builder.add_node("agent", _agent_node)
-    builder.add_node("tools", _tools_node)
+    builder.add_node("agent", agent_node)
+    builder.add_node("tools", tools_node)
     builder.set_entry_point("agent")
-    builder.add_conditional_edges("agent", _route_tools, {"tools": "tools", END: END})
-    builder.add_edge("tools", "agent")
-    return builder.compile()
+    builder.add_conditional_edges("agent", route_after_agent, {"tools": "tools", END: END})
+    builder.add_conditional_edges("tools", route_after_tools, {"tools": "tools", "agent": "agent"})
+    return builder.compile(checkpointer=checkpointer)
 
 
-# Compiled once at import time — ephemeral, no checkpointer, no persistence.
-_GRAPH = _build_graph()
+# ── shared event-translation loop ───────────────────────────────────────────
 
-
-# ── main streaming entry point ────────────────────────────────────────────────
-
-async def stream_agent(
-    session_id: str,
-    history: list[dict],
-    max_iterations: int = 12,
-    cancel_event=None,
-) -> AsyncGenerator[str, None]:
-    """
-    Run the LangGraph ReAct loop and yield SSE-formatted strings.
-    Tokens are emitted live — no full-buffer wait.
-    Pass cancel_event and set() it to abort mid-stream.
-
-    `session_id` is accepted for call-site compatibility with main.py
-    (and for the session-scoped tool binding a later change adds); it
-    is not otherwise used by this ephemeral, non-checkpointed graph.
-    """
-
+async def _consume(graph, run_input, config, cancel_event, session_id: str) -> AsyncGenerator[str, None]:
     def sse(payload: dict) -> str:
         return f"data: {json.dumps(payload)}\n\n"
 
     def cancelled() -> bool:
         return cancel_event is not None and cancel_event.is_set()
 
-    messages: list[BaseMessage] = [
-        SystemMessage(content=SYSTEM_PROMPT),
-        *convert_to_messages(history),
-    ]
+    parsers: dict[str, _ThinkParser] = {}
 
-    # 12 model calls ≈ 12 agent->tools supersteps -> recursion_limit ~24.
-    config = {"recursion_limit": max_iterations * 2}
-
-    parser = _ThinkParser()
+    def parser_for(key: str) -> _ThinkParser:
+        if key not in parsers:
+            parsers[key] = _ThinkParser()
+        return parsers[key]
 
     try:
-        async for event in _GRAPH.astream_events({"messages": messages}, config=config, version="v2"):
+        async for event in graph.astream_events(run_input, config=config, version="v2"):
             if cancelled():
                 yield sse({"type": "cancelled"})
                 return
@@ -281,37 +267,127 @@ async def stream_agent(
                 chunk = event["data"]["chunk"]
                 content = getattr(chunk, "content", "") or ""
                 if isinstance(content, list):
-                    # Some providers emit content as a list of blocks
-                    # (e.g. {"type": "text", "text": "..."}) rather than
-                    # a plain string.
-                    text = "".join(
-                        block.get("text", "") if isinstance(block, dict) else str(block)
-                        for block in content
-                    )
+                    text = "".join(b.get("text", "") if isinstance(b, dict) else str(b) for b in content)
                 else:
                     text = content
 
+                subagent = (event.get("metadata") or {}).get("subagent")
+                key = subagent or "__main__"
                 if text:
-                    for label, seg in parser.feed(text):
-                        if seg:
+                    for label, seg in parser_for(key).feed(text):
+                        if not seg:
+                            continue
+                        if subagent:
+                            parent_call_id = (event.get("metadata") or {}).get("parent_call_id")
+                            yield sse({"type": f"subagent_{label}", "parent_call_id": parent_call_id, "subagent": subagent, "text": seg})
+                        else:
                             yield sse({"type": label, "text": seg})
 
             elif kind == "on_chat_model_end":
-                for label, seg in parser.flush():
-                    if seg:
+                subagent = (event.get("metadata") or {}).get("subagent")
+                key = subagent or "__main__"
+                for label, seg in parser_for(key).flush():
+                    if not seg:
+                        continue
+                    if subagent:
+                        parent_call_id = (event.get("metadata") or {}).get("parent_call_id")
+                        yield sse({"type": f"subagent_{label}", "parent_call_id": parent_call_id, "subagent": subagent, "text": seg})
+                    else:
                         yield sse({"type": label, "text": seg})
-                # Fresh parser for the next model turn in this loop.
-                parser = _ThinkParser()
+                parsers[key] = _ThinkParser()
 
-            elif kind == "on_custom_event" and event["name"] in ("tool_start", "tool_result"):
+            elif kind == "on_custom_event":
                 yield sse({"type": event["name"], **event["data"]})
 
-        yield sse({"type": "done"})
+        # Loop ended naturally — either the graph finished, or a
+        # checkpointed interrupt() paused it. Distinguish the two by
+        # inspecting the checkpointed state.
+        state = await graph.aget_state(config)
+        if state.next:
+            interrupt_value = state.tasks[0].interrupts[0].value
+            thread_id = config["configurable"]["thread_id"]
+            call_id = interrupt_value["call_id"]
+            PENDING_GRAPH_APPROVALS[call_id] = {"thread_id": thread_id, "session_id": session_id}
+            asyncio.create_task(_auto_deny_after_timeout(call_id, thread_id, session_id))
+            yield sse({"type": "approval_required", **interrupt_value})
+        else:
+            yield sse({"type": "done"})
 
     except GraphRecursionError:
-        # Matches the pre-migration behaviour: exhausting the iteration
-        # budget produces a successful-looking "done", not an error.
         yield sse({"type": "done"})
 
     except Exception as exc:
         yield sse({"type": "error", "detail": str(exc)})
+
+
+async def _auto_deny_after_timeout(call_id: str, thread_id: str, session_id: str) -> None:
+    """
+    Scheduled the moment a C137-level gated call pauses the graph.
+    If nobody resolves it via POST /sessions/{id}/approve within
+    APPROVAL_TIMEOUT_SECONDS, resumes it with a deny itself and
+    persists the resulting turn straight to the DB — the original
+    /chat connection is long since closed, so there's no live stream
+    to forward this through.
+    """
+    await asyncio.sleep(APPROVAL_TIMEOUT_SECONDS)
+    if call_id not in PENDING_GRAPH_APPROVALS:
+        return  # already resolved by a real approve/deny
+    PENDING_GRAPH_APPROVALS.pop(call_id, None)
+
+    parts: list[str] = []
+    async for chunk in resume_agent(session_id, thread_id, {"decision": "deny", "reason": "timeout"}):
+        try:
+            payload = json.loads(chunk.removeprefix("data: ").strip())
+            if payload.get("type") == "delta":
+                parts.append(payload.get("text", ""))
+        except Exception:
+            pass
+
+    full_response = "".join(parts)
+    if full_response.strip():
+        await append_message(session_id, "assistant", full_response)
+
+
+# ── public entry points ──────────────────────────────────────────────────────
+
+async def stream_agent(
+    session_id: str,
+    history: list[dict],
+    max_iterations: int = 12,
+    cancel_event=None,
+) -> AsyncGenerator[str, None]:
+    """Starts a fresh turn. See module docstring for the approval-gate shape."""
+    tools, registry, system_prompt = await _build_turn_tools(session_id)
+    checkpointer = await get_checkpointer()
+    graph = _build_graph(tools, registry, checkpointer)
+
+    messages: list[BaseMessage] = [SystemMessage(content=system_prompt), *convert_to_messages(history)]
+    thread_id = str(uuid.uuid4())
+    config = {"configurable": {"thread_id": thread_id}, "recursion_limit": max_iterations * 2}
+
+    async for chunk in _consume(graph, {"messages": messages, "pending_tool_calls": []}, config, cancel_event, session_id):
+        yield chunk
+
+
+async def resume_agent(
+    session_id: str,
+    thread_id: str,
+    decision: dict,
+    max_iterations: int = 12,
+    cancel_event=None,
+) -> AsyncGenerator[str, None]:
+    """
+    Continues a turn paused on a C137-level gated call. `decision` is
+    e.g. {"decision": "approve"} or {"decision": "deny"}. Rebuilds
+    tools/graph fresh from this session's (immutable, locked-at-start)
+    config — the paused VALUES live in the checkpointer by thread_id,
+    not in the graph object, so rebuilding it here is correct.
+    """
+    tools, registry, _system_prompt = await _build_turn_tools(session_id)
+    checkpointer = await get_checkpointer()
+    graph = _build_graph(tools, registry, checkpointer)
+
+    config = {"configurable": {"thread_id": thread_id}, "recursion_limit": max_iterations * 2}
+
+    async for chunk in _consume(graph, Command(resume=decision), config, cancel_event, session_id):
+        yield chunk
