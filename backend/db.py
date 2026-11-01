@@ -44,6 +44,30 @@ async def init_db():
             text       TEXT NOT NULL,
             ts         REAL NOT NULL
         );
+
+        -- Cross-session persistent memory. Deliberately a flat key/value
+        -- store, global (not per-session) — this is C137's own long-term
+        -- memory, not chat history. No concrete spec for this was ever
+        -- agreed beyond "a memory_read/memory_write tool should exist";
+        -- this is a minimal, honest implementation of that, not a richer
+        -- design someone signed off on.
+        CREATE TABLE IF NOT EXISTS memory_entries (
+            key     TEXT PRIMARY KEY,
+            value   TEXT NOT NULL,
+            updated REAL NOT NULL
+        );
+
+        -- Scheduled/background jobs: a stored prompt + a due time. Picked
+        -- up by the polling loop in backend/scheduler.py, not by this
+        -- file (db.py only owns the storage).
+        CREATE TABLE IF NOT EXISTS scheduled_tasks (
+            id         TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+            prompt     TEXT NOT NULL,
+            run_at     REAL NOT NULL,
+            status     TEXT NOT NULL DEFAULT 'pending',
+            created    REAL NOT NULL
+        );
         """)
         await db.commit()
 
@@ -176,6 +200,77 @@ async def get_blackboard(session_id: str) -> list[dict]:
         async with db.execute(
             "SELECT * FROM blackboard_entries WHERE session_id=? ORDER BY ts",
             (session_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+# ── cross-session memory ────────────────────────────────────────────────────
+
+async def memory_set(key: str, value: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            INSERT INTO memory_entries (key, value, updated) VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated = excluded.updated
+            """,
+            (key, value, time.time()),
+        )
+        await db.commit()
+
+
+async def memory_get(key: str) -> str | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT value FROM memory_entries WHERE key=?", (key,)) as cur:
+            row = await cur.fetchone()
+    return row[0] if row else None
+
+
+async def memory_list(prefix: str = "") -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT key, value, updated FROM memory_entries WHERE key LIKE ? ORDER BY key",
+            (f"{prefix}%",),
+        ) as cur:
+            rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+# ── scheduled tasks ──────────────────────────────────────────────────────────
+
+async def add_scheduled_task(session_id: str, prompt: str, run_at: float) -> str:
+    tid = str(uuid.uuid4())
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO scheduled_tasks (id,session_id,prompt,run_at,status,created) VALUES (?,?,?,?,?,?)",
+            (tid, session_id, prompt, run_at, "pending", time.time()),
+        )
+        await db.commit()
+    return tid
+
+
+async def get_due_tasks(now: float) -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM scheduled_tasks WHERE status='pending' AND run_at<=?", (now,)
+        ) as cur:
+            rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def mark_task_status(task_id: str, status: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE scheduled_tasks SET status=? WHERE id=?", (status, task_id))
+        await db.commit()
+
+
+async def list_scheduled_tasks(session_id: str) -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM scheduled_tasks WHERE session_id=? ORDER BY run_at", (session_id,)
         ) as cur:
             rows = await cur.fetchall()
     return [dict(r) for r in rows]

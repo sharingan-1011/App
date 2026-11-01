@@ -28,6 +28,10 @@ dependencies = [
     # openai: no longer imported directly — kept pinned as the
     # transitive dependency langchain-openai actually uses.
     "openai>=1.50",
+    # browser_action (backend/tools/browser.py). Run
+    # "playwright install chromium" once after installing this package —
+    # pip alone does not fetch the browser binary.
+    "playwright>=1.47",
     "requests>=2.32",
 ]
 

@@ -60,9 +60,9 @@ from backend.db import add_blackboard_entry
 from backend.tools.blackboard import make_blackboard_tool
 
 SPECIALIST_TOOL_NAMES: dict[str, list[str]] = {
-    "Ba-56": ["shell_exec", "fs_read", "fs_write", "fs_list", "fs_delete", "repl_run"],
-    "La-57": ["web_search", "web_fetch"],
-    "Ce-58": ["repl_run", "fs_read"],
+    "Ba-56": ["shell_exec", "fs_read", "fs_write", "fs_list", "fs_delete", "repl_run", "memory_read"],
+    "La-57": ["web_search", "web_fetch", "browser_action", "memory_read"],
+    "Ce-58": ["repl_run", "fs_read", "memory_read"],
 }
 
 SPECIALIST_SYSTEM_PROMPTS: dict[str, str] = {

@@ -15,4 +15,8 @@ langchain-openai==1.7.3
 # Approval gate: AsyncSqliteSaver checkpointer for backend/checkpointer.py,
 # against its own checkpoints.db — kept separate from forge.db.
 langgraph-checkpoint-sqlite==3.1.3
+# browser_action (backend/tools/browser.py). The browser binary itself
+# ("playwright install chromium") is a separate, one-time setup step,
+# not something pip alone provides.
+playwright>=1.47
 requests>=2.32

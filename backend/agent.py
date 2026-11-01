@@ -54,6 +54,8 @@ from backend.llm import get_model
 from backend.tools import GATED_TOOLS, TOOL_REGISTRY, TOOLS
 from backend.tools.blackboard import make_blackboard_tool
 from backend.tools.subagent import make_spawn_subagent_tool
+from backend.tools.search_skills import SKILL_REGISTRY
+from backend.tools.scheduler import make_schedule_task_tool
 
 BASE_SYSTEM_PROMPT = """You are C137, a capable agentic AI assistant with access to tools.
 
@@ -69,6 +71,8 @@ Guidelines:
 - Be concise and direct in your final response.
 - Use uuid_gen only when a new, unique identifier is actually needed; never call it just to decorate a response.
 - Post important findings, decisions, blockers, or context to the shared blackboard with blackboard_post so other agents and the user can see them without digging through tool-call history.
+- Not every tool you might need is in your list. If something you need isn't there, call search_skills with keywords describing it — a match becomes callable by name on your NEXT turn, not the same one.
+- Use memory_read/memory_write for anything that should persist across sessions (not this one conversation). Use schedule_task only when the user asks for something to happen later or in the background, not for anything you can just do now.
 """
 
 DEPLOYED_SYSTEM_PROMPT_ADDENDUM = """
@@ -156,6 +160,7 @@ class _ThinkParser:
 class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     pending_tool_calls: list[dict]
+    unlocked_skills: list[str]
 
 
 # ── per-turn tool/model setup ───────────────────────────────────────────────
@@ -163,13 +168,17 @@ class AgentState(TypedDict):
 async def _build_turn_tools(session_id: str) -> tuple[list, dict, str]:
     """
     Returns (tools, tool_registry, system_prompt) for this session —
-    solo mode gets the base roster + blackboard; deployed mode also
-    gets spawn_subagent, scoped to that session's active_specialists.
+    solo mode gets the base roster + blackboard + schedule_task;
+    deployed mode also gets spawn_subagent, scoped to that session's
+    active_specialists. Tier-3 skills in SKILL_REGISTRY are NOT
+    included here regardless of mode — see search_skills.py; they're
+    added per-call in agent_node based on state["unlocked_skills"].
     """
     cfg = await get_session_config(session_id)
     blackboard_tool = make_blackboard_tool(session_id, "C137")
-    tools = [*TOOLS, blackboard_tool]
-    registry = {**TOOL_REGISTRY, blackboard_tool.name: blackboard_tool}
+    schedule_tool = make_schedule_task_tool(session_id)
+    tools = [*TOOLS, blackboard_tool, schedule_tool]
+    registry = {**TOOL_REGISTRY, blackboard_tool.name: blackboard_tool, schedule_tool.name: schedule_tool}
     system_prompt = BASE_SYSTEM_PROMPT
 
     if cfg["subagents_enabled"] and cfg["active_specialists"]:
@@ -189,7 +198,8 @@ async def _build_turn_tools(session_id: str) -> tuple[list, dict, str]:
 
 def _build_graph(tools: list, tool_registry: dict, checkpointer):
     async def agent_node(state: AgentState) -> dict:
-        model = get_model().bind_tools(tools)
+        unlocked = [SKILL_REGISTRY[s] for s in state.get("unlocked_skills", []) if s in SKILL_REGISTRY]
+        model = get_model().bind_tools([*tools, *unlocked])
         ai_message = await model.ainvoke(state["messages"])
         pending = ai_message.tool_calls if isinstance(ai_message, AIMessage) else []
         return {"messages": [ai_message], "pending_tool_calls": pending}
@@ -201,6 +211,8 @@ def _build_graph(tools: list, tool_registry: dict, checkpointer):
         tc, *rest = pending
         call_id, name, args = tc["id"], tc["name"], tc["args"]
 
+        newly_unlocked: list[str] = []
+
         if name in GATED_TOOLS:
             decision = interrupt({"call_id": call_id, "name": name, "args": args})
         else:
@@ -210,19 +222,24 @@ def _build_graph(tools: list, tool_registry: dict, checkpointer):
             output = json.dumps({"ok": False, "error": "Denied by user (or timed out waiting for approval)."})
         else:
             await adispatch_custom_event("tool_start", {"call_id": call_id, "name": name, "args": args})
-            tool = tool_registry.get(name)
+            # SKILL_REGISTRY tools aren't in tool_registry (they're only
+            # bound in agent_node once unlocked) — check there too.
+            tool = tool_registry.get(name) or SKILL_REGISTRY.get(name)
             if tool is None:
                 output = json.dumps({"error": f"Unknown tool: {name}"})
             else:
                 try:
                     result = await tool.ainvoke(args)
                     output = json.dumps(result, ensure_ascii=False)
+                    if name == "search_skills" and isinstance(result, dict):
+                        newly_unlocked = [m["name"] for m in result.get("matches", [])]
                 except Exception as exc:
                     output = json.dumps({"error": str(exc)})
             await adispatch_custom_event("tool_result", {"call_id": call_id, "name": name, "output": output})
 
         tm = ToolMessage(content=output, tool_call_id=call_id, name=name)
-        return {"messages": [tm], "pending_tool_calls": rest}
+        updated_unlocked = list(set(state.get("unlocked_skills", []) + newly_unlocked))
+        return {"messages": [tm], "pending_tool_calls": rest, "unlocked_skills": updated_unlocked}
 
     def route_after_agent(state: AgentState) -> str:
         return "tools" if state["pending_tool_calls"] else END
@@ -365,7 +382,8 @@ async def stream_agent(
     thread_id = str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}, "recursion_limit": max_iterations * 2}
 
-    async for chunk in _consume(graph, {"messages": messages, "pending_tool_calls": []}, config, cancel_event, session_id):
+    initial_state = {"messages": messages, "pending_tool_calls": [], "unlocked_skills": []}
+    async for chunk in _consume(graph, initial_state, config, cancel_event, session_id):
         yield chunk
 
 

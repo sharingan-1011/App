@@ -22,7 +22,10 @@ from backend.tools.shell import shell_exec
 from backend.tools.fs import fs_read, fs_write, fs_list, fs_delete
 from backend.tools.repl import repl_run
 from backend.tools.web import web_fetch, web_search
-from backend.tools.uuid_gen import uuid_gen
+from backend.tools.memory import build_memory_tools
+from backend.tools.search_skills import build_search_skills_tool
+from backend.tools.browser import build_browser_tool
+from backend.tools.computer import build_computer_tool
 
 
 # ── args schemas — mirror the original TOOL_SCHEMAS parameters exactly ──────
@@ -71,11 +74,20 @@ class WebSearchArgs(BaseModel):
     max_results: int = Field(5, description="Max results to return (default 5)")
 
 
-class UuidGenArgs(BaseModel):
-    """uuid_gen takes no arguments."""
-
-
 # ── StructuredTool wrappers — descriptions preserved verbatim ───────────────
+#
+# Tier 1 (compulsory, always bound): fs_*, shell_exec, repl_run, web_*,
+# memory_read/memory_write, search_skills. blackboard_post and
+# spawn_subagent are session-scoped, built fresh per turn in agent.py —
+# not listed here.
+#
+# Tier 2 (heavy, gated, bound alongside Tier 1 — small enough roster
+# today that the "don't blindly load every turn" schema-bloat concern
+# from the tiering design doesn't bite yet): browser_action,
+# computer_action.
+#
+# Tier 3 (on-demand, NOT bound here): backend/tools/search_skills.py's
+# SKILL_REGISTRY — currently just uuid_gen.
 
 TOOLS: list[StructuredTool] = [
     StructuredTool.from_function(
@@ -129,12 +141,10 @@ TOOLS: list[StructuredTool] = [
         description="Search the web using DuckDuckGo. Returns top N results with title, URL, and snippet.",
         args_schema=WebSearchArgs,
     ),
-    StructuredTool.from_function(
-        coroutine=uuid_gen,
-        name="uuid_gen",
-        description="Generate a single random UUID4. Use when a unique identifier is needed and no other tool supplies one.",
-        args_schema=UuidGenArgs,
-    ),
+    *build_memory_tools(),
+    build_search_skills_tool(),
+    build_browser_tool(),
+    build_computer_tool(),
 ]
 
 # name -> StructuredTool, derived from TOOLS — agent.py's tools-node looks
@@ -147,7 +157,11 @@ TOOL_REGISTRY: dict[str, StructuredTool] = {tool.name: tool for tool in TOOLS}
 # graph actually uses — but it's cheap to keep derived and in sync.
 TOOL_SCHEMAS: list[dict] = [convert_to_openai_tool(tool) for tool in TOOLS]
 
-# Gated tools: shell_exec, fs_write, fs_delete, repl_run require explicit
-# human approval before execution (the gate agent.py's approval_gate node
-# enforces). browser_action / computer_action join this set once built.
-GATED_TOOLS: frozenset[str] = frozenset({"shell_exec", "fs_write", "fs_delete", "repl_run"})
+# Gated tools: require explicit human approval before execution (the
+# gate in agent.py's tools_node enforces this). computer_action is
+# gated too even though it's a stub today — the gating is wired ahead
+# of the real implementation, consistent with its own module docstring.
+GATED_TOOLS: frozenset[str] = frozenset({
+    "shell_exec", "fs_write", "fs_delete", "repl_run",
+    "browser_action", "computer_action",
+})

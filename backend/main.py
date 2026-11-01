@@ -42,19 +42,23 @@ from backend.db import (
     get_session,
     get_session_config,
     init_db,
+    list_scheduled_tasks,
     list_sessions,
     set_session_config,
     update_session_title,
 )
 from backend.tools.repl import clear_repl
 from backend.tools.subagent import PENDING_SPECIALIST_APPROVALS
+from backend.tools.scheduler import run_scheduler_loop
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
     await get_checkpointer()  # warm the approval-gate checkpointer once at startup
+    scheduler_task = asyncio.create_task(run_scheduler_loop(stream_agent))
     yield
+    scheduler_task.cancel()
     await close_checkpointer()
 
 
@@ -106,6 +110,11 @@ async def get_session_config_endpoint(session_id: str):
 @app.get("/sessions/{session_id}/blackboard")
 async def get_session_blackboard(session_id: str):
     return await get_blackboard(session_id)
+
+
+@app.get("/sessions/{session_id}/scheduled_tasks")
+async def get_scheduled_tasks(session_id: str):
+    return await list_scheduled_tasks(session_id)
 
 
 class RenameRequest(BaseModel):
