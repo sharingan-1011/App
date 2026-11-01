@@ -1,8 +1,0 @@
-fastapi>=0.115
-uvicorn[standard]>=0.30
-aiosqlite>=0.20
-python-dotenv>=1.0
-openai>=1.50
-langgraph>=0.2
-requests>=2.32
-beautifulsoup4>=4.12
