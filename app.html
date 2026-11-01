@@ -211,6 +211,106 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 #stop-btn { background: rgba(248,81,73,.15); color: var(--red); border: 1px solid rgba(248,81,73,.3); display: none; }
 #stop-btn:hover { background: rgba(248,81,73,.3); }
 #hint { text-align: center; margin-top: 8px; font-size: 11px; color: var(--muted); }
+
+/* ── subagent deployment: new-chat picker, topbar badge, nested cards, blackboard ── */
+.specialist-Ba-56 { color: #4f8cff; }
+.specialist-La-57 { color: #2dd4bf; }
+.specialist-Ce-58 { color: #a78bfa; }
+.specialist-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+.dot-Ba-56 { background: #4f8cff; }
+.dot-La-57 { background: #2dd4bf; }
+.dot-Ce-58 { background: #a78bfa; }
+
+#modal-overlay {
+  display: none; position: fixed; inset: 0; background: rgba(0,0,0,.6);
+  align-items: center; justify-content: center; z-index: 100;
+}
+#modal-overlay.visible { display: flex; }
+#new-chat-modal {
+  width: 440px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 14px; padding: 22px 24px;
+}
+#new-chat-modal h2 { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+#new-chat-modal .sub { font-size: 11.5px; color: var(--muted); margin-bottom: 16px; line-height: 1.5; }
+.mode-option { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; cursor: pointer; }
+.mode-option.selected { border-color: var(--accent); background: var(--accent-lo); }
+.mode-option .mode-head { display: flex; align-items: center; gap: 9px; font-weight: 600; font-size: 13px; }
+.mode-option .mode-radio { width: 15px; height: 15px; border-radius: 50%; border: 2px solid var(--muted); flex-shrink: 0; position: relative; }
+.mode-option.selected .mode-radio { border-color: var(--accent); }
+.mode-option.selected .mode-radio::after { content: ''; position: absolute; inset: 2px; border-radius: 50%; background: var(--accent); }
+.mode-option .mode-desc { font-size: 11.5px; color: var(--muted); margin: 5px 0 0 24px; line-height: 1.4; }
+#specialist-checks { margin: 10px 0 0 24px; display: none; flex-direction: column; gap: 7px; }
+#specialist-checks.visible { display: flex; }
+#specialist-checks label { font-size: 12px; display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--text); }
+#start-chat-btn {
+  width: 100%; margin-top: 14px; padding: 10px 0; background: var(--accent);
+  border: none; border-radius: 9px; color: #fff; font-weight: 700; font-size: 13px; cursor: pointer;
+}
+
+#deploy-badge {
+  font-size: 10.5px; font-weight: 700; border-radius: 6px; padding: 3px 8px;
+  border: 1px solid var(--border); color: var(--muted); display: none; align-items: center; gap: 6px;
+}
+#deploy-badge.visible { display: inline-flex; }
+#deploy-badge.deployed { color: var(--accent); background: var(--accent-lo); border-color: rgba(124,106,247,.3); }
+
+#blackboard-toggle {
+  position: relative; background: none; border: 1px solid var(--border); border-radius: 8px;
+  color: var(--yellow); cursor: pointer; padding: 6px 10px; font-size: 11.5px; font-weight: 600;
+  display: flex; align-items: center; gap: 6px; display: none;
+}
+#blackboard-toggle.visible { display: flex; }
+#blackboard-unread {
+  background: var(--yellow); color: #1a1200; font-size: 10px; font-weight: 700;
+  border-radius: 9px; padding: 0 6px; display: none;
+}
+#blackboard-unread.visible { display: inline-block; }
+
+#blackboard-drawer {
+  position: absolute; top: 0; right: -320px; width: 300px; height: 100%;
+  background: var(--surface); border-left: 1px solid var(--border);
+  display: flex; flex-direction: column; transition: right .18s; z-index: 50;
+}
+#blackboard-drawer.open { right: 0; }
+#blackboard-header { padding: 14px 16px; border-bottom: 1px solid var(--border); }
+#blackboard-header .title { font-weight: 700; font-size: 13px; display: flex; align-items: center; gap: 7px; }
+#blackboard-header .desc { font-size: 11px; color: var(--muted); margin-top: 4px; line-height: 1.4; }
+#blackboard-list { flex: 1; overflow-y: auto; padding: 10px 14px; display: flex; flex-direction: column; gap: 9px; }
+.bb-entry { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 11.5px; }
+.bb-entry .bb-meta { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.bb-entry .bb-author { font-weight: 700; font-size: 11px; }
+.bb-entry .bb-tag { font-size: 9px; border-radius: 4px; padding: 0 5px; border: 1px solid var(--border); }
+.bb-entry .bb-tag.blocker  { color: var(--yellow); border-color: rgba(210,153,34,.4); }
+.bb-entry .bb-tag.finding  { color: var(--red); border-color: rgba(248,81,73,.4); }
+.bb-entry .bb-tag.decision { color: var(--green); border-color: rgba(63,185,80,.4); }
+.bb-entry .bb-tag.context  { color: var(--accent); border-color: rgba(124,106,247,.4); }
+.bb-entry .bb-text { color: var(--text); line-height: 1.45; }
+.bb-entry .bb-reassign { margin-top: 6px; font-size: 10.5px; color: var(--accent); cursor: pointer; }
+
+.subagent-card { margin: 8px 0 0; border-radius: 8px; overflow: hidden; }
+.subagent-head { display: flex; align-items: center; gap: 8px; padding: 7px 10px; font-size: 11.5px; font-weight: 700; }
+.subagent-body { padding: 0 10px 8px; font-size: 12px; }
+.subagent-think { color: var(--muted); font-style: italic; font-size: 11.5px; margin-bottom: 4px; }
+.subagent-status { margin-left: auto; font-size: 10.5px; font-weight: 600; }
+
+.approval-card {
+  margin: 8px 0; border: 1px solid rgba(210,153,34,.45); background: rgba(210,153,34,.07);
+  border-radius: 9px; overflow: hidden;
+}
+.approval-head { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: 1px solid rgba(210,153,34,.25); font-size: 12px; }
+.approval-head .name { font-family: var(--mono); font-weight: 600; color: var(--text); }
+.approval-head .badge { font-size: 9px; font-weight: 700; color: var(--yellow); background: rgba(210,153,34,.14); border-radius: 4px; padding: 1.5px 6px; }
+.approval-head .timer { margin-left: auto; font-size: 10.5px; color: var(--yellow); font-weight: 600; }
+.approval-body { padding: 10px 12px; }
+.approval-body pre { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-bottom: 8px; white-space: pre-wrap; }
+.approval-actions { display: flex; gap: 7px; flex-wrap: wrap; }
+.approval-actions button {
+  flex: 1; padding: 7px 0; border-radius: 7px; font-size: 11.5px; font-weight: 600; cursor: pointer; border: 1px solid;
+}
+.btn-approve { background: rgba(63,185,80,.14); border-color: rgba(63,185,80,.4); color: var(--green); }
+.btn-deny    { background: rgba(248,81,73,.1);  border-color: rgba(248,81,73,.35); color: var(--red); }
+.btn-reassign { background: rgba(124,106,247,.1); border-color: rgba(124,106,247,.35); color: var(--accent); }
+.approval-resolved { padding: 8px 12px; font-size: 11.5px; color: var(--muted); font-style: italic; }
 </style>
 </head>
 <body>
@@ -224,10 +324,26 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
     <div id="session-list"></div>
   </div>
 
-  <div id="main">
+  <div id="main" style="position: relative;">
     <div id="topbar">
       <span class="session-name" id="topbar-title">C137</span>
       <span class="model-badge" id="model-badge">C137</span>
+      <span id="deploy-badge"></span>
+      <button id="blackboard-toggle" title="Shared blackboard">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v12H5.17L4 17.17V4z"/></svg>
+        Blackboard
+        <span id="blackboard-unread">0</span>
+      </button>
+    </div>
+    <div id="blackboard-drawer">
+      <div id="blackboard-header">
+        <div class="title">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--yellow)" stroke-width="2"><path d="M4 4h16v12H5.17L4 17.17V4z"/></svg>
+          Shared blackboard
+        </div>
+        <div class="desc">Every active agent posts findings here as it works.</div>
+      </div>
+      <div id="blackboard-list"></div>
     </div>
     <div id="messages">
       <div id="empty">
@@ -261,6 +377,30 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
   </div>
 </div>
 
+<div id="modal-overlay">
+  <div id="new-chat-modal">
+    <h2>Start a new chat</h2>
+    <div class="sub">Choose how C137 works for this whole session. This can't be changed once the chat starts.</div>
+
+    <div class="mode-option selected" id="mode-solo">
+      <div class="mode-head"><span class="mode-radio"></span> Solo — C137 all-rounder</div>
+      <div class="mode-desc">Full tool roster, no delegation. Default — best for most tasks.</div>
+    </div>
+
+    <div class="mode-option" id="mode-deployed">
+      <div class="mode-head"><span class="mode-radio"></span> Deployed — delegate to specialists</div>
+      <div class="mode-desc">C137 becomes planner-first and delegates to whichever specialists you activate.</div>
+      <div id="specialist-checks">
+        <label><input type="checkbox" value="Ba-56"> <span class="specialist-dot dot-Ba-56"></span> Ba-56 — coding (shell, fs, repl)</label>
+        <label><input type="checkbox" value="La-57"> <span class="specialist-dot dot-La-57"></span> La-57 — research (search, fetch)</label>
+        <label><input type="checkbox" value="Ce-58"> <span class="specialist-dot dot-Ce-58"></span> Ce-58 — data analysis (repl, fs_read)</label>
+      </div>
+    </div>
+
+    <button id="start-chat-btn">Start chat</button>
+  </div>
+</div>
+
 <script>
 const API = 'http://localhost:8000';
 
@@ -291,6 +431,118 @@ const fileInput   = document.getElementById('file-input');
 const attachBar   = document.getElementById('attach-bar');
 const attachName  = document.getElementById('attach-name');
 const attachClear = document.getElementById('attach-clear');
+const modalOverlay    = document.getElementById('modal-overlay');
+const modeSolo        = document.getElementById('mode-solo');
+const modeDeployed    = document.getElementById('mode-deployed');
+const specialistChecks= document.getElementById('specialist-checks');
+const startChatBtn    = document.getElementById('start-chat-btn');
+const deployBadge     = document.getElementById('deploy-badge');
+const bbToggle        = document.getElementById('blackboard-toggle');
+const bbUnread        = document.getElementById('blackboard-unread');
+const bbDrawer        = document.getElementById('blackboard-drawer');
+const bbList          = document.getElementById('blackboard-list');
+
+const SPECIALIST_NAMES = ['Ba-56', 'La-57', 'Ce-58'];
+let unreadBlackboard = 0;
+let bbDrawerOpen = false;
+
+// ── new-chat picker modal ───────────────────────────────────────────────
+modeSolo.addEventListener('click', () => {
+  modeSolo.classList.add('selected'); modeDeployed.classList.remove('selected');
+  specialistChecks.classList.remove('visible');
+});
+modeDeployed.addEventListener('click', (e) => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'LABEL') return;
+  modeDeployed.classList.add('selected'); modeSolo.classList.remove('selected');
+  specialistChecks.classList.add('visible');
+});
+
+function openNewChatModal() {
+  modeSolo.classList.add('selected'); modeDeployed.classList.remove('selected');
+  specialistChecks.classList.remove('visible');
+  specialistChecks.querySelectorAll('input').forEach(i => i.checked = false);
+  modalOverlay.classList.add('visible');
+}
+function closeNewChatModal() { modalOverlay.classList.remove('visible'); }
+
+async function createSessionFromModal() {
+  const deployed = modeDeployed.classList.contains('selected');
+  const active = deployed
+    ? [...specialistChecks.querySelectorAll('input:checked')].map(i => i.value)
+    : [];
+  const res = await fetch(`${API}/sessions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ subagents_enabled: deployed && active.length > 0, active_specialists: active }),
+  });
+  const data = await res.json();
+  currentSessionId = data.session_id;
+  sessions.push({ id: currentSessionId, title: 'New Chat' });
+  clearMessages();
+  topbarTitle.textContent = 'New Chat';
+  renderSidebar();
+  closeNewChatModal();
+  await loadSessionConfig(currentSessionId);
+  await loadBlackboard(currentSessionId);
+}
+startChatBtn.addEventListener('click', createSessionFromModal);
+modalOverlay.addEventListener('click', e => { if (e.target === modalOverlay) closeNewChatModal(); });
+
+// ── deploy-mode badge + shared blackboard ───────────────────────────────
+async function loadSessionConfig(id) {
+  try {
+    const res = await fetch(`${API}/sessions/${id}/config`);
+    const cfg = await res.json();
+    if (cfg.subagents_enabled && cfg.active_specialists?.length) {
+      deployBadge.className = 'deploy-badge visible deployed';
+      deployBadge.innerHTML = 'Deployed · ' + cfg.active_specialists
+        .map(s => `<span class="specialist-${s}">${s}</span>`).join(' ');
+      deployBadge.id = 'deploy-badge';
+      bbToggle.classList.add('visible');
+    } else {
+      deployBadge.id = 'deploy-badge';
+      deployBadge.className = '';
+      deployBadge.textContent = '';
+      bbToggle.classList.remove('visible');
+      bbDrawer.classList.remove('open'); bbDrawerOpen = false;
+    }
+  } catch { /* config endpoint optional for older sessions */ }
+}
+
+function renderBlackboardEntry(entry) {
+  const el = document.createElement('div');
+  el.className = 'bb-entry';
+  el.innerHTML = `
+    <div class="bb-meta">
+      <span class="bb-author specialist-${entry.author}">${escHtml(entry.author)}</span>
+      <span class="bb-tag ${entry.tag}">${entry.tag}</span>
+    </div>
+    <div class="bb-text">${escHtml(entry.text)}</div>`;
+  bbList.appendChild(el);
+  bbList.scrollTop = bbList.scrollHeight;
+  if (!bbDrawerOpen) {
+    unreadBlackboard++;
+    bbUnread.textContent = unreadBlackboard;
+    bbUnread.classList.add('visible');
+  }
+}
+
+async function loadBlackboard(id) {
+  bbList.innerHTML = '';
+  unreadBlackboard = 0;
+  bbUnread.classList.remove('visible');
+  try {
+    const res = await fetch(`${API}/sessions/${id}/blackboard`);
+    const entries = await res.json();
+    entries.forEach(renderBlackboardEntry);
+  } catch { /* no entries yet */ }
+}
+
+bbToggle.addEventListener('click', () => {
+  bbDrawerOpen = !bbDrawerOpen;
+  bbDrawer.classList.toggle('open', bbDrawerOpen);
+  if (bbDrawerOpen) { unreadBlackboard = 0; bbUnread.classList.remove('visible'); }
+});
 
 // ── THE ONLY CHANGED FUNCTION vs previous version ──────────────
 async function loadSessions() {
@@ -365,6 +617,8 @@ async function switchSession(id) {
   const session = sessions.find(s => s.id === id);
   topbarTitle.textContent = session?.title || 'New Chat';
   await loadHistory(id);
+  await loadSessionConfig(id);
+  await loadBlackboard(id);
   renderSidebar();
 }
 
@@ -386,15 +640,7 @@ async function loadHistory(sessionId) {
   scrollBottom();
 }
 
-newChatBtn.addEventListener('click', async () => {
-  const res  = await fetch(`${API}/sessions`, { method: 'POST' });
-  const data = await res.json();
-  currentSessionId = data.session_id;
-  sessions.push({ id: data.session_id, title: 'New Chat' });
-  clearMessages();
-  topbarTitle.textContent = 'New Chat';
-  renderSidebar();
-});
+newChatBtn.addEventListener('click', openNewChatModal);
 
 function appendUserBubble(text, attachInfo) {
   emptyEl.style.display = 'none';
@@ -521,6 +767,238 @@ function formatToolOutput(name, rawOutput) {
   return `<pre>${escHtml(JSON.stringify(parsed, null, 2))}</pre>`;
 }
 
+// ── subagent nested cards + approval cards ──────────────────────────────
+
+function buildSubagentCard(ctx, parentCallId, specialist, task) {
+  const parent = ctx.toolCards.get(parentCallId);
+  const host = parent ? parent.body : ctx.bubble.parentElement;
+
+  const card = document.createElement('div');
+  card.className = 'subagent-card';
+  card.style.border = '1px solid var(--border)';
+  card.innerHTML = `
+    <div class="subagent-head">
+      <span class="specialist-dot dot-${specialist}"></span>
+      <span class="specialist-${specialist}">${escHtml(specialist)}</span>
+      <span class="subagent-status" style="color:var(--yellow)">running…</span>
+    </div>
+    <div class="subagent-body">
+      <div class="subagent-think" style="display:none;"></div>
+      <div class="subagent-tools"></div>
+      <div class="subagent-text"></div>
+    </div>`;
+  if (parent) {
+    parent.card.classList.add('open');
+    host.appendChild(card);
+  } else {
+    host.appendChild(card);
+  }
+
+  const refs = {
+    card,
+    statusEl: card.querySelector('.subagent-status'),
+    thinkEl:  card.querySelector('.subagent-think'),
+    toolsEl:  card.querySelector('.subagent-tools'),
+    textEl:   card.querySelector('.subagent-text'),
+    thinkBuf: '', deltaBuf: '',
+    toolCards: new Map(),
+  };
+  ctx.subagentCards.set(parentCallId + '|' + specialist, refs);
+  return refs;
+}
+
+function buildApprovalCard(ctx, ev) {
+  const card = document.createElement('div');
+  card.className = 'approval-card';
+  card.id = `appr-${ev.call_id}`;
+
+  const label = ev.subagent ? `${ev.subagent} wants to run` : 'Needs your approval to run';
+  card.innerHTML = `
+    <div class="approval-head">
+      <span class="name">${escHtml(ev.name)}</span>
+      <span class="badge">${escHtml(label)}</span>
+      <span class="timer">waiting…</span>
+    </div>
+    <div class="approval-body">
+      <pre>${escHtml(JSON.stringify(ev.args || {}, null, 2))}</pre>
+      <div class="approval-actions"></div>
+    </div>`;
+
+  const actions = card.querySelector('.approval-actions');
+  const approveBtn = document.createElement('button');
+  approveBtn.className = 'btn-approve'; approveBtn.textContent = 'Approve';
+  const denyBtn = document.createElement('button');
+  denyBtn.className = 'btn-deny'; denyBtn.textContent = 'Deny';
+  actions.appendChild(approveBtn); actions.appendChild(denyBtn);
+
+  if (ev.subagent) {
+    const others = SPECIALIST_NAMES.filter(s => s !== ev.subagent);
+    others.forEach(other => {
+      const btn = document.createElement('button');
+      btn.className = 'btn-reassign';
+      btn.textContent = `→ ${other}`;
+      btn.addEventListener('click', () => resolveApproval(ctx, card, ev, 'reassign', other));
+      actions.appendChild(btn);
+    });
+  }
+
+  approveBtn.addEventListener('click', () => resolveApproval(ctx, card, ev, 'approve'));
+  denyBtn.addEventListener('click', () => resolveApproval(ctx, card, ev, 'deny'));
+
+  return card;
+}
+
+async function resolveApproval(ctx, card, ev, decision, reassignTo) {
+  card.querySelectorAll('button').forEach(b => b.disabled = true);
+  const body = { call_id: ev.call_id, decision };
+  if (reassignTo) body.reassign_to = reassignTo;
+
+  const res = await fetch(`${API}/sessions/${currentSessionId}/approve`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  });
+
+  const resolvedNote = document.createElement('div');
+  resolvedNote.className = 'approval-resolved';
+  resolvedNote.textContent = decision === 'reassign' ? `Reassigned to ${reassignTo}.` : `${decision === 'approve' ? 'Approved' : 'Denied'}.`;
+  card.querySelector('.approval-body').appendChild(resolvedNote);
+
+  if (ev.subagent) {
+    // Specialist-level: the original /chat stream is still open and will
+    // keep delivering events on its own — nothing more to do here.
+    return;
+  }
+
+  // C137-level: that connection already closed. This response is a FRESH
+  // SSE stream continuing the same turn into the same row.
+  if (!res.body) return;
+  const reader = res.body.getReader();
+  ctx.cursor && ctx.bubble.appendChild(ctx.cursor);
+  await consumeStream(reader, ctx);
+}
+
+async function consumeStream(reader, ctx) {
+  const decoder = new TextDecoder();
+  let buf = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split('\n');
+    buf = lines.pop();
+
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      let ev;
+      try { ev = JSON.parse(line.slice(6)); } catch { continue; }
+      handleEvent(ctx, ev);
+    }
+  }
+}
+
+function handleEvent(ctx, ev) {
+  const { row, thinkBlock, bubble } = ctx;
+
+  if (ev.type === 'thinking') {
+    if (!ctx.hasThink) { thinkBlock.style.display = 'block'; ctx.hasThink = true; }
+    ctx.thinkBuf += ev.text;
+    thinkBlock.querySelector('.thinking-body').textContent = ctx.thinkBuf;
+    scrollBottom();
+  }
+  else if (ev.type === 'delta') {
+    ctx.deltaBuf += ev.text;
+    bubble.innerHTML = marked.parse(ctx.deltaBuf);
+    if (ctx.cursor) bubble.appendChild(ctx.cursor);
+    scrollBottom();
+  }
+  else if (ev.type === 'tool_start') {
+    const card = buildToolCard(ev.call_id, ev.name, ev.args || {});
+    if (ctx.cursor) ctx.cursor.remove();
+    bubble.innerHTML = marked.parse(ctx.deltaBuf);
+    row.insertBefore(card, bubble);
+    if (ctx.cursor) bubble.appendChild(ctx.cursor);
+    ctx.toolCards.set(ev.call_id, { card, body: card.querySelector('.tool-body') });
+    scrollBottom();
+  }
+  else if (ev.type === 'tool_result') {
+    const badge     = document.getElementById(`badge-${ev.call_id}`);
+    const resultSec = document.getElementById(`tr-${ev.call_id}`);
+    let isErr = false;
+    try { if (JSON.parse(ev.output || '{}').error) isErr = true; } catch {}
+    if (badge)     { badge.className = `tool-badge ${isErr?'err':'ok'}`; badge.textContent = isErr?'ERR':'OK'; }
+    if (resultSec) { resultSec.innerHTML = `<div class="label">Output</div>${formatToolOutput(ev.name, ev.output||'{}')}`; }
+    scrollBottom();
+  }
+  else if (ev.type === 'approval_required') {
+    const card = buildApprovalCard(ctx, ev);
+    if (ctx.cursor) ctx.cursor.remove();
+    bubble.innerHTML = marked.parse(ctx.deltaBuf);
+    if (ev.subagent) {
+      const parent = ctx.subagentCards.get(ev.parent_call_id + '|' + ev.subagent);
+      (parent ? parent.toolsEl : row).appendChild(card);
+    } else {
+      row.insertBefore(card, bubble);
+      if (ctx.cursor) bubble.appendChild(ctx.cursor);
+    }
+    scrollBottom();
+  }
+  else if (ev.type === 'subagent_start') {
+    buildSubagentCard(ctx, ev.parent_call_id, ev.subagent, ev.task);
+    scrollBottom();
+  }
+  else if (ev.type === 'subagent_thinking') {
+    const r = ctx.subagentCards.get(ev.parent_call_id + '|' + ev.subagent);
+    if (r) { r.thinkBuf += ev.text; r.thinkEl.style.display = 'block'; r.thinkEl.textContent = r.thinkBuf; }
+    scrollBottom();
+  }
+  else if (ev.type === 'subagent_delta') {
+    const r = ctx.subagentCards.get(ev.parent_call_id + '|' + ev.subagent);
+    if (r) { r.deltaBuf += ev.text; r.textEl.innerHTML = marked.parse(r.deltaBuf); }
+    scrollBottom();
+  }
+  else if (ev.type === 'subagent_tool_start') {
+    const r = ctx.subagentCards.get(ev.parent_call_id + '|' + ev.subagent);
+    if (r) {
+      const card = buildToolCard(ev.call_id, ev.name, ev.args || {});
+      r.toolsEl.appendChild(card);
+      r.toolCards.set(ev.call_id, card);
+    }
+    scrollBottom();
+  }
+  else if (ev.type === 'subagent_tool_result') {
+    const badge     = document.getElementById(`badge-${ev.call_id}`);
+    const resultSec = document.getElementById(`tr-${ev.call_id}`);
+    let isErr = false;
+    try { if (JSON.parse(ev.output || '{}').error) isErr = true; } catch {}
+    if (badge)     { badge.className = `tool-badge ${isErr?'err':'ok'}`; badge.textContent = isErr?'ERR':'OK'; }
+    if (resultSec) { resultSec.innerHTML = `<div class="label">Output</div>${formatToolOutput(ev.name, ev.output||'{}')}`; }
+    scrollBottom();
+  }
+  else if (ev.type === 'subagent_done') {
+    const r = ctx.subagentCards.get(ev.parent_call_id + '|' + ev.subagent);
+    if (r) { r.statusEl.textContent = 'done'; r.statusEl.style.color = 'var(--green)'; }
+    scrollBottom();
+  }
+  else if (ev.type === 'blackboard_entry') {
+    renderBlackboardEntry(ev);
+  }
+  else if (ev.type === 'done' || ev.type === 'cancelled') {
+    if (ctx.cursor) ctx.cursor.remove();
+    bubble.innerHTML = marked.parse(ctx.deltaBuf || '');
+    bubble.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));
+    if (ctx.hasThink) {
+      thinkBlock.querySelector('.thinking-header').innerHTML =
+        `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg> Thought process`;
+    }
+    loadSessions();
+    scrollBottom();
+  }
+  else if (ev.type === 'error') {
+    if (ctx.cursor) ctx.cursor.remove();
+    bubble.innerHTML = `<span style="color:var(--red)">⚠ ${escHtml(ev.detail || 'Unknown error')}</span>`;
+  }
+}
+
 async function send() {
   const text = msgInput.value.trim();
   if (!text && !pendingAttach) return;
@@ -555,10 +1033,15 @@ async function send() {
   sendBtn.disabled = true;
 
   const { row, thinkBlock, bubble } = createStreamRow();
-  let thinkBuf = '', deltaBuf = '', hasThink = false;
   const cursor = document.createElement('span');
   cursor.className = 'cursor';
   bubble.appendChild(cursor);
+
+  const ctx = {
+    row, thinkBlock, bubble, cursor,
+    thinkBuf: '', deltaBuf: '', hasThink: false,
+    toolCards: new Map(), subagentCards: new Map(),
+  };
 
   try {
     const response = await fetch(`${API}/chat`, {
@@ -568,74 +1051,14 @@ async function send() {
       signal: abortController.signal,
     });
 
-    const reader  = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const lines = buf.split('\n');
-      buf = lines.pop();
-
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        let ev;
-        try { ev = JSON.parse(line.slice(6)); } catch { continue; }
-
-        if (ev.type === 'thinking') {
-          if (!hasThink) { thinkBlock.style.display = 'block'; hasThink = true; }
-          thinkBuf += ev.text;
-          thinkBlock.querySelector('.thinking-body').textContent = thinkBuf;
-          scrollBottom();
-        }
-        else if (ev.type === 'delta') {
-          deltaBuf += ev.text;
-          bubble.innerHTML = marked.parse(deltaBuf);
-          bubble.appendChild(cursor);
-          scrollBottom();
-        }
-        else if (ev.type === 'tool_start') {
-          const card = buildToolCard(ev.call_id, ev.name, ev.args || {});
-          cursor.remove();
-          bubble.innerHTML = marked.parse(deltaBuf);
-          row.insertBefore(card, bubble);
-          bubble.appendChild(cursor);
-          scrollBottom();
-        }
-        else if (ev.type === 'tool_result') {
-          const badge     = document.getElementById(`badge-${ev.call_id}`);
-          const resultSec = document.getElementById(`tr-${ev.call_id}`);
-          let isErr = false;
-          try { if (JSON.parse(ev.output || '{}').error) isErr = true; } catch {}
-          if (badge)     { badge.className = `tool-badge ${isErr?'err':'ok'}`; badge.textContent = isErr?'ERR':'OK'; }
-          if (resultSec) { resultSec.innerHTML = `<div class="label">Output</div>${formatToolOutput(ev.name, ev.output||'{}')}` ; }
-          scrollBottom();
-        }
-        else if (ev.type === 'done' || ev.type === 'cancelled') {
-          cursor.remove();
-          bubble.innerHTML = marked.parse(deltaBuf || '');
-          bubble.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));
-          if (hasThink) {
-            thinkBlock.querySelector('.thinking-header').innerHTML =
-              `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg> Thought process`;
-          }
-          await loadSessions();
-          scrollBottom();
-        }
-        else if (ev.type === 'error') {
-          cursor.remove();
-          bubble.innerHTML = `<span style="color:var(--red)">⚠ ${escHtml(ev.detail || 'Unknown error')}</span>`;
-        }
-      }
-    }
+    const reader = response.body.getReader();
+    await consumeStream(reader, ctx);
   } catch (err) {
     cursor.remove();
     if (err.name !== 'AbortError') {
       bubble.innerHTML = `<span style="color:var(--red)">⚠ Connection error: ${escHtml(String(err))}</span>`;
     } else {
-      bubble.innerHTML = marked.parse(deltaBuf || '_(cancelled)_');
+      bubble.innerHTML = marked.parse(ctx.deltaBuf || '_(cancelled)_');
     }
   } finally {
     streaming = false;
@@ -692,6 +1115,8 @@ function scrollBottom() { messagesEl.scrollTop = messagesEl.scrollHeight; }
     currentSessionId = data.session_id;
     sessions.push({ id: currentSessionId, title: 'New Chat' });
     renderSidebar();
+    await loadSessionConfig(currentSessionId);
+    await loadBlackboard(currentSessionId);
   } else {
     await switchSession(sessions[sessions.length - 1].id);
   }
