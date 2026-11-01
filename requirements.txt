@@ -2,7 +2,14 @@ fastapi>=0.115
 uvicorn[standard]>=0.30
 aiosqlite>=0.20
 python-dotenv>=1.0
+# openai: no longer imported directly (backend/llm.py now builds a
+# langchain_openai.ChatOpenAI client) — kept pinned as the transitive
+# dependency langchain-openai actually uses under the hood.
 openai>=1.50
-langgraph>=0.2
+# Phase 3 integration: the real LangGraph/LangChain agent loop. Pinned
+# exact so this doesn't quietly drift back into "declared but unused"
+# the way the old langgraph line did.
+langgraph==1.2.19
+langchain-core==1.7.3
+langchain-openai==1.7.3
 requests>=2.32
-beautifulsoup4>=4.12
