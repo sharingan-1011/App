@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "forge"
+version = "0.1.0"
+description = "C137 FORGE — Agentic Harness Phase 1"
+requires-python = ">=3.11"
+
+dependencies = [
+    # FastAPI backend
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "aiosqlite>=0.20",
+    "python-dotenv>=1.0",
+    # Phase 3 integration: the real LangGraph/LangChain agent loop
+    # (backend/agent.py's StateGraph, backend/llm.py's ChatOpenAI client,
+    # backend/tools/__init__.py's StructuredTool wrappers). Pinned exact
+    # so this doesn't quietly drift back into "declared but unused" the
+    # way the old bare "langchain" / "langgraph>=0.2" lines did.
+    "langgraph==1.2.19",
+    "langchain-core==1.7.3",
+    "langchain-openai==1.7.3",
+    # Approval gate's checkpointer (backend/checkpointer.py), against its
+    # own checkpoints.db, kept separate from forge.db.
+    "langgraph-checkpoint-sqlite==3.1.3",
+    # openai: no longer imported directly — kept pinned as the
+    # transitive dependency langchain-openai actually uses.
+    "openai>=1.50",
+    "requests>=2.32",
+]
+
+[project.scripts]
+forge-backend = "uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload"

@@ -1,0 +1,38 @@
+# Python bytecode and caches
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environment
+.venv/
+venv/
+env/
+ENV/
+
+# Environment variables (keep .env.example)
+.env
+.env.*
+!.env.example
+
+# Database files
+forge.db
+*.db
+*.sqlite
+*.sqlite3
+
+# Python packaging
+*.egg
+*.egg-info/
+build/
+dist/
+*.whl/
+
+# IDE and editors
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Logs and temp files
+*.log
+*.tmp
