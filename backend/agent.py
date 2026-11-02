@@ -49,13 +49,16 @@ from langgraph.types import Command, interrupt
 
 from backend.checkpointer import get_checkpointer
 from backend.config import APPROVAL_TIMEOUT_SECONDS
-from backend.db import append_message, get_session_config
+from backend.db import append_message, get_session_config, record_thread
 from backend.llm import get_model
+from backend.logging_config import get_logger
 from backend.tools import GATED_TOOLS, TOOL_REGISTRY, TOOLS
 from backend.tools.blackboard import make_blackboard_tool
 from backend.tools.subagent import make_spawn_subagent_tool
 from backend.tools.search_skills import SKILL_REGISTRY
 from backend.tools.scheduler import make_schedule_task_tool
+
+logger = get_logger("agent")
 
 BASE_SYSTEM_PROMPT = """You are C137, a capable agentic AI assistant with access to tools.
 
@@ -234,6 +237,7 @@ def _build_graph(tools: list, tool_registry: dict, checkpointer):
                     if name == "search_skills" and isinstance(result, dict):
                         newly_unlocked = [m["name"] for m in result.get("matches", [])]
                 except Exception as exc:
+                    logger.exception("tool %s (call_id=%s) raised", name, call_id)
                     output = json.dumps({"error": str(exc)})
             await adispatch_custom_event("tool_result", {"call_id": call_id, "name": name, "output": output})
 
@@ -331,9 +335,11 @@ async def _consume(graph, run_input, config, cancel_event, session_id: str) -> A
             yield sse({"type": "done"})
 
     except GraphRecursionError:
+        logger.warning("session %s: hit recursion limit, ending turn", session_id)
         yield sse({"type": "done"})
 
     except Exception as exc:
+        logger.exception("session %s: unhandled error in agent loop", session_id)
         yield sse({"type": "error", "detail": str(exc)})
 
 
@@ -381,6 +387,11 @@ async def stream_agent(
     messages: list[BaseMessage] = [SystemMessage(content=system_prompt), *convert_to_messages(history)]
     thread_id = str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}, "recursion_limit": max_iterations * 2}
+
+    # Recorded so backend/checkpointer.py's pruning job can find and
+    # clean up this turn's checkpoints.db rows once it's old enough —
+    # see db.py's turn_threads table.
+    await record_thread(thread_id, session_id)
 
     initial_state = {"messages": messages, "pending_tool_calls": [], "unlocked_skills": []}
     async for chunk in _consume(graph, initial_state, config, cancel_event, session_id):

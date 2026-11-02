@@ -1,0 +1,3 @@
+# Test-only dependencies (not needed to run the server itself).
+# Install with: pip install -r requirements.txt -r requirements-test.txt --break-system-packages
+pytest>=8.0
