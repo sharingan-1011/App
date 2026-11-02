@@ -34,6 +34,14 @@ class ShellExecArgs(BaseModel):
     cmd: str = Field(..., description="Command to execute")
     cwd: str | None = Field(None, description="Working directory (optional)")
     timeout: int = Field(30, description="Timeout in seconds (default 30)")
+    use_shell: bool = Field(
+        True,
+        description=(
+            "True (default): full shell interpretation (pipes, redirects, globbing). "
+            "False: argv-exec, no shell metacharacter interpretation — prefer this for "
+            "a single program + plain arguments."
+        ),
+    )
 
 
 class FsReadArgs(BaseModel):
