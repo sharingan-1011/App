@@ -6,8 +6,37 @@ import aiosqlite
 from backend.config import DB_PATH
 
 
+def _connect(path: str = DB_PATH):
+    """
+    aiosqlite.connect() wrapper — callers should `async with` this just
+    like aiosqlite.connect() directly. Reliability hardening: every
+    connection now gets WAL journal mode (readers don't block writers,
+    and vice versa) and a busy_timeout, so a concurrent write from the
+    scheduler loop firing while a live /chat turn is also writing
+    doesn't immediately surface as "database is locked" — it waits up
+    to the timeout instead. Previously every call opened a connection
+    with SQLite's defaults (rollback-journal mode, 0 busy_timeout).
+    """
+    return _ConnectWithPragmas(path)
+
+
+class _ConnectWithPragmas:
+    def __init__(self, path: str):
+        self._path = path
+        self._conn = None
+
+    async def __aenter__(self) -> aiosqlite.Connection:
+        self._conn = await aiosqlite.connect(self._path)
+        await self._conn.execute("PRAGMA journal_mode=WAL")
+        await self._conn.execute("PRAGMA busy_timeout=5000")
+        return self._conn
+
+    async def __aexit__(self, exc_type, exc, tb):
+        await self._conn.close()
+
+
 async def init_db():
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         await db.executescript("""
         CREATE TABLE IF NOT EXISTS sessions (
             id        TEXT PRIMARY KEY,
@@ -68,6 +97,20 @@ async def init_db():
             status     TEXT NOT NULL DEFAULT 'pending',
             created    REAL NOT NULL
         );
+
+        -- Registry of LangGraph thread_ids, one per turn (see agent.py —
+        -- every stream_agent() call mints a fresh thread_id). Lets
+        -- backend/checkpointer.py's pruning job find and delete
+        -- checkpoints.db rows for turns old enough to be done with,
+        -- without needing to know that saver's internal schema beyond
+        -- "it's keyed by thread_id". Deliberately NOT in checkpoints.db
+        -- itself — same separation-of-concerns reasoning as the rest of
+        -- this app's two-database split.
+        CREATE TABLE IF NOT EXISTS turn_threads (
+            thread_id  TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+            created    REAL NOT NULL
+        );
         """)
         await db.commit()
 
@@ -75,7 +118,7 @@ async def init_db():
 async def create_session(title: str = "New Chat") -> dict:
     sid = str(uuid.uuid4())
     now = time.time()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         await db.execute(
             "INSERT INTO sessions (id,title,created,updated) VALUES (?,?,?,?)",
             (sid, title, now, now),
@@ -85,7 +128,7 @@ async def create_session(title: str = "New Chat") -> dict:
 
 
 async def list_sessions() -> list[dict]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT * FROM sessions ORDER BY updated DESC"
@@ -95,7 +138,7 @@ async def list_sessions() -> list[dict]:
 
 
 async def get_session(sid: str) -> dict | None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT * FROM sessions WHERE id=?", (sid,)) as cur:
             row = await cur.fetchone()
@@ -103,7 +146,7 @@ async def get_session(sid: str) -> dict | None:
 
 
 async def update_session_title(sid: str, title: str):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         await db.execute(
             "UPDATE sessions SET title=?, updated=? WHERE id=?",
             (title, time.time(), sid),
@@ -112,7 +155,7 @@ async def update_session_title(sid: str, title: str):
 
 
 async def delete_session(sid: str):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         await db.execute("DELETE FROM sessions WHERE id=?", (sid,))
         await db.commit()
 
@@ -120,7 +163,7 @@ async def delete_session(sid: str):
 async def append_message(session_id: str, role: str, content: str) -> str:
     mid = str(uuid.uuid4())
     now = time.time()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         await db.execute(
             "INSERT INTO messages (id,session_id,role,content,ts) VALUES (?,?,?,?,?)",
             (mid, session_id, role, content, now),
@@ -133,7 +176,7 @@ async def append_message(session_id: str, role: str, content: str) -> str:
 
 
 async def get_history(session_id: str) -> list[dict]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT * FROM messages WHERE session_id=? ORDER BY ts",
@@ -152,7 +195,7 @@ async def get_history_for_llm(session_id: str) -> list[dict]:
 # ── session_config: subagent deploy picker, locked for the session ─────────
 
 async def set_session_config(session_id: str, subagents_enabled: bool, active_specialists: list[str]) -> None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         await db.execute(
             """
             INSERT INTO session_config (session_id, subagents_enabled, active_specialists)
@@ -167,7 +210,7 @@ async def set_session_config(session_id: str, subagents_enabled: bool, active_sp
 
 
 async def get_session_config(session_id: str) -> dict:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT * FROM session_config WHERE session_id=?", (session_id,)
@@ -185,7 +228,7 @@ async def get_session_config(session_id: str) -> dict:
 
 async def add_blackboard_entry(session_id: str, author: str, tag: str, text: str) -> str:
     eid = str(uuid.uuid4())
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         await db.execute(
             "INSERT INTO blackboard_entries (id,session_id,author,tag,text,ts) VALUES (?,?,?,?,?,?)",
             (eid, session_id, author, tag, text, time.time()),
@@ -195,7 +238,7 @@ async def add_blackboard_entry(session_id: str, author: str, tag: str, text: str
 
 
 async def get_blackboard(session_id: str) -> list[dict]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT * FROM blackboard_entries WHERE session_id=? ORDER BY ts",
@@ -208,7 +251,7 @@ async def get_blackboard(session_id: str) -> list[dict]:
 # ── cross-session memory ────────────────────────────────────────────────────
 
 async def memory_set(key: str, value: str) -> None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         await db.execute(
             """
             INSERT INTO memory_entries (key, value, updated) VALUES (?, ?, ?)
@@ -220,14 +263,14 @@ async def memory_set(key: str, value: str) -> None:
 
 
 async def memory_get(key: str) -> str | None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         async with db.execute("SELECT value FROM memory_entries WHERE key=?", (key,)) as cur:
             row = await cur.fetchone()
     return row[0] if row else None
 
 
 async def memory_list(prefix: str = "") -> list[dict]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT key, value, updated FROM memory_entries WHERE key LIKE ? ORDER BY key",
@@ -241,7 +284,7 @@ async def memory_list(prefix: str = "") -> list[dict]:
 
 async def add_scheduled_task(session_id: str, prompt: str, run_at: float) -> str:
     tid = str(uuid.uuid4())
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         await db.execute(
             "INSERT INTO scheduled_tasks (id,session_id,prompt,run_at,status,created) VALUES (?,?,?,?,?,?)",
             (tid, session_id, prompt, run_at, "pending", time.time()),
@@ -251,7 +294,7 @@ async def add_scheduled_task(session_id: str, prompt: str, run_at: float) -> str
 
 
 async def get_due_tasks(now: float) -> list[dict]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT * FROM scheduled_tasks WHERE status='pending' AND run_at<=?", (now,)
@@ -261,16 +304,44 @@ async def get_due_tasks(now: float) -> list[dict]:
 
 
 async def mark_task_status(task_id: str, status: str) -> None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         await db.execute("UPDATE scheduled_tasks SET status=? WHERE id=?", (status, task_id))
         await db.commit()
 
 
 async def list_scheduled_tasks(session_id: str) -> list[dict]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT * FROM scheduled_tasks WHERE session_id=? ORDER BY run_at", (session_id,)
         ) as cur:
             rows = await cur.fetchall()
     return [dict(r) for r in rows]
+
+
+# ── turn/thread registry (checkpoint pruning support) ───────────────────────
+
+async def record_thread(thread_id: str, session_id: str) -> None:
+    async with _connect() as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO turn_threads (thread_id, session_id, created) VALUES (?,?,?)",
+            (thread_id, session_id, time.time()),
+        )
+        await db.commit()
+
+
+async def get_stale_threads(older_than: float) -> list[dict]:
+    """Threads recorded before `older_than` (a Unix timestamp)."""
+    async with _connect() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM turn_threads WHERE created < ?", (older_than,)
+        ) as cur:
+            rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def delete_thread_record(thread_id: str) -> None:
+    async with _connect() as db:
+        await db.execute("DELETE FROM turn_threads WHERE thread_id=?", (thread_id,))
+        await db.commit()

@@ -24,6 +24,9 @@ from pydantic import BaseModel, Field
 from langchain_core.tools import StructuredTool
 
 from backend.db import add_scheduled_task, append_message, get_due_tasks, get_history_for_llm, mark_task_status
+from backend.logging_config import get_logger
+
+logger = get_logger("scheduler")
 
 POLL_INTERVAL_SECONDS = 15
 
@@ -53,24 +56,33 @@ def make_schedule_task_tool(session_id: str) -> StructuredTool:
 async def _run_due_task(task: dict, stream_agent) -> None:
     session_id = task["session_id"]
     prompt = task["prompt"]
+    task_id = task["id"]
 
-    await append_message(session_id, "user", f"[scheduled task fired] {prompt}")
-    history = await get_history_for_llm(session_id)
+    try:
+        await append_message(session_id, "user", f"[scheduled task fired] {prompt}")
+        history = await get_history_for_llm(session_id)
 
-    parts: list[str] = []
-    async for chunk in stream_agent(session_id, history):
+        parts: list[str] = []
+        async for chunk in stream_agent(session_id, history):
+            try:
+                payload = json.loads(chunk.removeprefix("data: ").strip())
+                if payload.get("type") == "delta":
+                    parts.append(payload.get("text", ""))
+            except Exception:
+                logger.debug("scheduled task %s: could not parse SSE chunk %r", task_id, chunk)
+
+        full_response = "".join(parts)
+        if full_response.strip():
+            await append_message(session_id, "assistant", full_response)
+
+        await mark_task_status(task_id, "done")
+        logger.info("scheduled task %s (session %s) completed", task_id, session_id)
+    except Exception:
+        logger.exception("scheduled task %s (session %s) failed", task_id, session_id)
         try:
-            payload = json.loads(chunk.removeprefix("data: ").strip())
-            if payload.get("type") == "delta":
-                parts.append(payload.get("text", ""))
+            await mark_task_status(task_id, "failed")
         except Exception:
-            pass
-
-    full_response = "".join(parts)
-    if full_response.strip():
-        await append_message(session_id, "assistant", full_response)
-
-    await mark_task_status(task["id"], "done")
+            logger.exception("scheduled task %s: also failed to mark status as 'failed'", task_id)
 
 
 async def run_scheduler_loop(stream_agent) -> None:
@@ -79,6 +91,12 @@ async def run_scheduler_loop(stream_agent) -> None:
     from main.py's lifespan. `stream_agent` is passed in rather than
     imported at module load time to avoid a circular import between
     agent.py and this module.
+
+    Previously the per-tick try/except swallowed every exception with
+    a bare `pass` — a malfunctioning scheduled task failed completely
+    silently, with nothing for an operator to look at. Now logged (with
+    traceback) before the loop continues; a bad tick still can't kill
+    the loop, but it's no longer invisible.
     """
     while True:
         try:
@@ -87,5 +105,5 @@ async def run_scheduler_loop(stream_agent) -> None:
                 await mark_task_status(task["id"], "running")
                 asyncio.create_task(_run_due_task(task, stream_agent))
         except Exception:
-            pass  # one bad task/tick must not kill the whole loop
+            logger.exception("scheduler loop tick failed")
         await asyncio.sleep(POLL_INTERVAL_SECONDS)

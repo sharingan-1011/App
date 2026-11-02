@@ -32,7 +32,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from backend.agent import PENDING_GRAPH_APPROVALS, resume_agent, stream_agent
-from backend.checkpointer import close_checkpointer, get_checkpointer
+from backend.checkpointer import close_checkpointer, get_checkpointer, prune_old_checkpoints
 from backend.db import (
     append_message,
     create_session,
@@ -51,15 +51,37 @@ from backend.tools.repl import clear_repl
 from backend.tools.subagent import PENDING_SPECIALIST_APPROVALS
 from backend.tools.scheduler import run_scheduler_loop
 from backend.tools.search_skills import SKILL_REGISTRY
+from backend.logging_config import configure_logging, get_logger
+
+configure_logging()
+logger = get_logger("main")
+
+
+PRUNE_INTERVAL_SECONDS = 6 * 3600  # once every 6 hours
+
+
+async def _run_prune_loop() -> None:
+    """Periodically prunes checkpoints.db — see checkpointer.py."""
+    while True:
+        try:
+            await prune_old_checkpoints()
+        except Exception:
+            logger.exception("checkpoint prune cycle failed")
+        await asyncio.sleep(PRUNE_INTERVAL_SECONDS)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    logger.info("FORGE starting up")
     await init_db()
     await get_checkpointer()  # warm the approval-gate checkpointer once at startup
     scheduler_task = asyncio.create_task(run_scheduler_loop(stream_agent))
+    prune_task = asyncio.create_task(_run_prune_loop())
+    logger.info("FORGE ready")
     yield
+    logger.info("FORGE shutting down")
     scheduler_task.cancel()
+    prune_task.cancel()
     await close_checkpointer()
 
 
