@@ -33,6 +33,7 @@ from pydantic import BaseModel
 
 from backend.agent import PENDING_GRAPH_APPROVALS, resume_agent, stream_agent
 from backend.checkpointer import close_checkpointer, get_checkpointer
+from backend.config import API_AUTH_KEY, CORS_ALLOWED_ORIGINS
 from backend.db import (
     append_message,
     create_session,
@@ -65,12 +66,32 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="FORGE", version="2.2.0", lifespan=lifespan)
 
+# Previously allow_origins=["*"] with any method/header — any page the
+# operator's browser visits could drive this backend's unauthenticated
+# tools cross-origin. Now restricted to backend.config.CORS_ALLOWED_ORIGINS
+# (defaults to localhost:8000/127.0.0.1:8000/null — the conventional
+# origins for opening app.html directly). Override via
+# FORGE_CORS_ALLOWED_ORIGINS for anything else.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Optional shared-secret auth gate. Off by default (API_AUTH_KEY == ""),
+# preserving existing single-operator behavior. Set FORGE_API_AUTH_KEY
+# to require a matching X-Forge-Key header on every request.
+@app.middleware("http")
+async def _auth_gate(request: Request, call_next):
+    if API_AUTH_KEY:
+        if request.method == "OPTIONS":
+            return await call_next(request)
+        supplied = request.headers.get("x-forge-key", "")
+        if supplied != API_AUTH_KEY:
+            return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    return await call_next(request)
 
 
 # ── sessions ──────────────────────────────────────────────────
