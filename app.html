@@ -31,6 +31,12 @@
 }
 
 html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font-family: var(--font); font-size: 14px; }
+/* Visible keyboard focus ring — previously relied entirely on the
+   browser default, which several custom interactive elements below
+   suppress or never receive because they weren't focusable at all. */
+button:focus-visible, [tabindex]:focus-visible, input:focus-visible, textarea:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
 #app { display: flex; height: 100vh; }
 #sidebar {
   width: var(--sidebar-w); background: var(--surface);
@@ -71,8 +77,9 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
   opacity: 0; font-size: 11px; color: var(--red);
   padding: 2px 4px; border-radius: 4px; cursor: pointer;
   transition: opacity .1s; flex-shrink: 0;
+  background: none; border: none; font-family: inherit;
 }
-.session-item:hover .session-del { opacity: 1; }
+.session-item:hover .session-del, .session-del:focus-visible { opacity: 1; }
 #main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 #topbar {
   padding: 12px 20px; border-bottom: 1px solid var(--border);
@@ -301,6 +308,13 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 .approval-head .name { font-family: var(--mono); font-weight: 600; color: var(--text); }
 .approval-head .badge { font-size: 9px; font-weight: 700; color: var(--yellow); background: rgba(210,153,34,.14); border-radius: 4px; padding: 1.5px 6px; }
 .approval-head .timer { margin-left: auto; font-size: 10.5px; color: var(--yellow); font-weight: 600; }
+.approval-head .timer.warn { color: var(--red); animation: timer-pulse 1s step-end infinite; }
+@keyframes timer-pulse { 50% { opacity: .5; } }
+@media (prefers-reduced-motion: reduce) {
+  .approval-head .timer.warn { animation: none; }
+  .cursor { animation: none; opacity: 1; }
+  #blackboard-drawer { transition: none; }
+}
 .approval-body { padding: 10px 12px; }
 .approval-body pre { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-bottom: 8px; white-space: pre-wrap; }
 .approval-actions { display: flex; gap: 7px; flex-wrap: wrap; }
@@ -339,6 +353,7 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 .state-banner.error     { background: rgba(248,81,73,.08); border: 1px solid rgba(248,81,73,.3); color: #f0a39e; }
 .state-banner.cancelled { background: rgba(210,153,34,.08); border: 1px solid rgba(210,153,34,.3); color: #e3c98a; }
 .state-banner.denied    { background: rgba(248,81,73,.06); border: 1px solid rgba(248,81,73,.25); color: #f0a39e; }
+.state-banner.conn-lost { background: rgba(210,153,34,.08); border: 1px solid rgba(210,153,34,.3); color: #e3c98a; }
 .state-banner svg { flex-shrink: 0; }
 
 /* ── slash-skill picker ──────────────────────────────────────────────── */
@@ -364,6 +379,32 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 }
 #drop-zone.active { display: flex; }
 #messages.drag-over #drop-zone { display: flex; }
+
+/* ── responsive: collapse sidebar to an overlay on narrow viewports ───── */
+#sidebar-collapse-btn { display: none; }
+@media (max-width: 768px) {
+  #app { position: relative; }
+  #sidebar {
+    position: fixed; left: 0; top: 0; height: 100%; z-index: 60;
+    transform: translateX(-100%); transition: transform .18s;
+    box-shadow: 2px 0 12px rgba(0,0,0,.4);
+  }
+  #sidebar.open { transform: translateX(0); }
+  #sidebar-collapse-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 32px; height: 32px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--surface2); color: var(--text); cursor: pointer; margin-right: 6px;
+  }
+  #sidebar-scrim {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 55;
+  }
+  #sidebar-scrim.visible { display: block; }
+  .msg-row { padding: 0 12px; }
+  #blackboard-drawer { width: 86vw; right: -86vw; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #sidebar { transition: none; }
+}
 </style>
 </head>
 <body>
@@ -380,9 +421,13 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
     </div>
     <div id="session-list"></div>
   </div>
+  <div id="sidebar-scrim"></div>
 
   <div id="main" style="position: relative;">
     <div id="topbar">
+      <button id="sidebar-collapse-btn" aria-label="Toggle chat list" aria-expanded="false" aria-controls="sidebar">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      </button>
       <span class="session-name" id="topbar-title">C137</span>
       <span class="model-badge" id="model-badge">C137</span>
       <span id="deploy-badge"></span>
@@ -506,10 +551,33 @@ const bbToggle        = document.getElementById('blackboard-toggle');
 const bbUnread        = document.getElementById('blackboard-unread');
 const bbDrawer        = document.getElementById('blackboard-drawer');
 const bbList          = document.getElementById('blackboard-list');
+const sidebarEl         = document.getElementById('sidebar');
+const sidebarScrim      = document.getElementById('sidebar-scrim');
+const sidebarCollapseBtn= document.getElementById('sidebar-collapse-btn');
 
 const SPECIALIST_NAMES = ['Ba-56', 'La-57', 'Ce-58'];
 let unreadBlackboard = 0;
 let bbDrawerOpen = false;
+
+// ── mobile sidebar toggle (narrow viewports only — see @media rule) ────
+function setSidebarOpen(open) {
+  sidebarEl.classList.toggle('open', open);
+  sidebarScrim.classList.toggle('visible', open);
+  sidebarCollapseBtn.setAttribute('aria-expanded', String(open));
+}
+sidebarCollapseBtn.addEventListener('click', () => setSidebarOpen(!sidebarEl.classList.contains('open')));
+sidebarScrim.addEventListener('click', () => setSidebarOpen(false));
+
+/** Fires a callback on Enter/Space, for elements using role="button"
+ *  instead of a native <button> (kept where converting to a real
+ *  button would complicate existing layout/CSS). */
+function onActivateKey(el, handler) {
+  el.setAttribute('tabindex', '0');
+  el.setAttribute('role', 'button');
+  el.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handler(e); }
+  });
+}
 
 // ── new-chat picker modal ───────────────────────────────────────────────
 modeSolo.addEventListener('click', () => {
@@ -655,9 +723,11 @@ function renderSidebar() {
     titleEl.className = 'session-title';
     titleEl.textContent = s.title || 'New Chat';
 
-    const delBtn = document.createElement('span');
+    const delBtn = document.createElement('button');
     delBtn.className = 'session-del';
+    delBtn.type = 'button';
     delBtn.title = 'Delete';
+    delBtn.setAttribute('aria-label', `Delete "${s.title || 'New Chat'}"`);
     delBtn.textContent = '✕';
     delBtn.addEventListener('click', async e => {
       e.stopPropagation();
@@ -710,6 +780,7 @@ async function switchSession(id) {
   await loadSessionConfig(id);
   await loadBlackboard(id);
   renderSidebar();
+  setSidebarOpen(false); // no-op on wide viewports; closes the overlay on mobile
 }
 
 function clearMessages() {
@@ -781,7 +852,9 @@ function createStreamRow() {
       Thinking…
     </div>
     <div class="thinking-body"></div>`;
-  thinkBlock.querySelector('.thinking-header').addEventListener('click', () => thinkBlock.classList.toggle('open'));
+  const thinkHeader = thinkBlock.querySelector('.thinking-header');
+  thinkHeader.addEventListener('click', () => thinkBlock.classList.toggle('open'));
+  onActivateKey(thinkHeader, () => thinkBlock.classList.toggle('open'));
 
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
@@ -818,6 +891,7 @@ function buildToolCard(callId, name, args) {
     <span class="tool-tier ${tier}">${tier.toUpperCase()}</span>
     <span class="tool-badge running" id="badge-${callId}">RUNNING</span>`;
   header.addEventListener('click', () => card.classList.toggle('open'));
+  onActivateKey(header, () => card.classList.toggle('open'));
 
   const body = document.createElement('div');
   body.className = 'tool-body';
@@ -910,6 +984,14 @@ function buildSubagentCard(ctx, parentCallId, specialist, task) {
   return refs;
 }
 
+// Mirrors backend/config.py's APPROVAL_TIMEOUT_SECONDS default (300s).
+// Purely a display countdown — the backend enforces the real timeout
+// server-side regardless of what this shows; if FORGE_APPROVAL_TIMEOUT_SECONDS
+// is overridden on the server, this display will be out of sync (a
+// known limitation of not having an endpoint that reports it).
+const APPROVAL_DISPLAY_TIMEOUT_SECONDS = 300;
+const APPROVAL_WARN_THRESHOLD_SECONDS = 30;
+
 function buildApprovalCard(ctx, ev) {
   const card = document.createElement('div');
   card.className = 'approval-card';
@@ -920,12 +1002,31 @@ function buildApprovalCard(ctx, ev) {
     <div class="approval-head">
       <span class="name">${escHtml(ev.name)}</span>
       <span class="badge">${escHtml(label)}</span>
-      <span class="timer">waiting…</span>
+      <span class="timer" role="timer" aria-live="polite">waiting…</span>
     </div>
     <div class="approval-body">
       <pre>${escHtml(JSON.stringify(ev.args || {}, null, 2))}</pre>
       <div class="approval-actions"></div>
     </div>`;
+
+  // Countdown toward the server's auto-deny timeout. Previously this
+  // span existed in the markup but nothing ever updated it — it said
+  // "waiting…" forever with no indication the 5-minute clock was
+  // running, so a user could be mid-decision when the call silently
+  // auto-denied with no warning.
+  const timerEl = card.querySelector('.timer');
+  let remaining = APPROVAL_DISPLAY_TIMEOUT_SECONDS;
+  const tick = () => {
+    const m = Math.floor(remaining / 60);
+    const s = remaining % 60;
+    timerEl.textContent = `${m}:${String(s).padStart(2, '0')} left`;
+    timerEl.classList.toggle('warn', remaining <= APPROVAL_WARN_THRESHOLD_SECONDS);
+    if (remaining <= 0) { clearInterval(intervalId); timerEl.textContent = 'expiring…'; }
+    remaining--;
+  };
+  tick();
+  const intervalId = setInterval(tick, 1000);
+  card._approvalIntervalId = intervalId;
 
   const actions = card.querySelector('.approval-actions');
   const approveBtn = document.createElement('button');
@@ -952,6 +1053,7 @@ function buildApprovalCard(ctx, ev) {
 }
 
 async function resolveApproval(ctx, card, ev, decision, reassignTo) {
+  if (card._approvalIntervalId) clearInterval(card._approvalIntervalId);
   card.querySelectorAll('button').forEach(b => b.disabled = true);
   const body = { call_id: ev.call_id, decision };
   if (reassignTo) body.reassign_to = reassignTo;
@@ -976,7 +1078,17 @@ async function resolveApproval(ctx, card, ev, decision, reassignTo) {
   if (!res.body) return;
   const reader = res.body.getReader();
   ctx.cursor && ctx.bubble.appendChild(ctx.cursor);
+  ctx.terminalReceived = false; // this resumed stream needs its own terminal event
   await consumeStream(reader, ctx);
+  if (!ctx.terminalReceived) {
+    if (ctx.cursor) ctx.cursor.remove();
+    const banner = document.createElement('div');
+    banner.className = 'state-banner conn-lost';
+    banner.setAttribute('role', 'status');
+    banner.textContent = 'Connection lost after approval — the turn may still be running server-side.';
+    ctx.row.appendChild(banner);
+    loadSessions();
+  }
 }
 
 async function consumeStream(reader, ctx) {
@@ -1040,6 +1152,15 @@ function handleEvent(ctx, ev) {
     scrollBottom();
   }
   else if (ev.type === 'approval_required') {
+    // For a top-level (non-subagent) call, main.py/agent.py intentionally
+    // close the original /chat connection here — the graph is paused on
+    // a checkpointed interrupt() until POST /approve opens a fresh
+    // stream. That's an expected end of THIS stream, not a dropped
+    // connection, so it must not trip the connection-lost banner in
+    // send(). (A subagent's gated call is different — the original
+    // stream stays open per agent.py's docstring — so it doesn't need
+    // this flag, but setting it unconditionally here is harmless.)
+    ctx.terminalReceived = true;
     const card = buildApprovalCard(ctx, ev);
     if (ctx.cursor) ctx.cursor.remove();
     bubble.innerHTML = marked.parse(ctx.deltaBuf);
@@ -1093,6 +1214,7 @@ function handleEvent(ctx, ev) {
     renderBlackboardEntry(ev);
   }
   else if (ev.type === 'done') {
+    ctx.terminalReceived = true;
     if (ctx.cursor) ctx.cursor.remove();
     bubble.innerHTML = marked.parse(ctx.deltaBuf || '');
     bubble.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));
@@ -1104,6 +1226,7 @@ function handleEvent(ctx, ev) {
     scrollBottom();
   }
   else if (ev.type === 'cancelled') {
+    ctx.terminalReceived = true;
     if (ctx.cursor) ctx.cursor.remove();
     bubble.innerHTML = marked.parse(ctx.deltaBuf || '');
     const banner = document.createElement('div');
@@ -1114,6 +1237,7 @@ function handleEvent(ctx, ev) {
     scrollBottom();
   }
   else if (ev.type === 'error') {
+    ctx.terminalReceived = true;
     if (ctx.cursor) ctx.cursor.remove();
     const banner = document.createElement('div');
     banner.className = 'state-banner error';
@@ -1163,7 +1287,7 @@ async function send() {
 
   const ctx = {
     row, thinkBlock, bubble, cursor,
-    thinkBuf: '', deltaBuf: '', hasThink: false,
+    thinkBuf: '', deltaBuf: '', hasThink: false, terminalReceived: false,
     toolCards: new Map(), subagentCards: new Map(),
   };
 
@@ -1177,6 +1301,24 @@ async function send() {
 
     const reader = response.body.getReader();
     await consumeStream(reader, ctx);
+    // consumeStream returns once the SSE connection closes, which
+    // normally happens right after a done/cancelled/error event.
+    // Previously a connection that dropped for any OTHER reason (a
+    // network blip, a backend restart) looked identical to the model
+    // simply finishing with an empty last sentence — nothing told the
+    // user the turn might still be running server-side. Only show
+    // this for a non-empty ctx.terminalReceived is false AND we
+    // weren't the one who aborted (abortController still set at this
+    // point since it's cleared in `finally`).
+    if (!ctx.terminalReceived) {
+      if (ctx.cursor) ctx.cursor.remove();
+      const banner = document.createElement('div');
+      banner.className = 'state-banner conn-lost';
+      banner.setAttribute('role', 'status');
+      banner.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 1l22 22M16.72 11.06A10.94 10.94 0 0119 12.55M5 12.55a10.94 10.94 0 015.17-2.39M10.71 5.05A16 16 0 0122.58 9M1.42 9a15.91 15.91 0 014.7-2.88M8.53 16.11a6 6 0 016.95 0M12 20h.01"/></svg> Connection lost — the turn may still be running server-side.`;
+      row.appendChild(banner);
+      loadSessions();
+    }
   } catch (err) {
     cursor.remove();
     if (err.name !== 'AbortError') {
