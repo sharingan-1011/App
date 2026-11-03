@@ -63,3 +63,28 @@ APPROVAL_TIMEOUT_SECONDS = int(os.getenv("FORGE_APPROVAL_TIMEOUT_SECONDS", "300"
 # set on llama-server itself (its own --parallel flag), not read here.
 # Kept so the number lives in one documented place.
 SUBAGENT_PARALLEL = int(os.getenv("FORGE_SUBAGENT_PARALLEL", "4"))
+
+# ── shell_exec sandboxing (P0 hardening) ────────────────────────────────
+#
+# shell_exec already runs as a real child process; these limits cap how
+# much damage an approved-but-runaway command can do. Enforcement is
+# platform-specific (see backend/tools/_sandbox.py): POSIX uses
+# resource.setrlimit via preexec_fn, Windows uses a Job Object (pywin32)
+# assigned to the child right after spawn. repl_run is NOT covered by
+# this — it executes in-process via a thread pool, and resource limits
+# are process-wide on POSIX, so sandboxing it this way would limit the
+# whole FastAPI server, not just the REPL code. It keeps relying solely
+# on its existing wall-clock timeout until it's moved to a real
+# subprocess (a separate, larger change: it would need to give up
+# persistent in-process state, or use a per-session worker subprocess).
+#
+# Set FORGE_SHELL_SANDBOX_ENABLED=false to disable enforcement entirely
+# (e.g. no pywin32 available and you'd rather know that loudly than have
+# every shell_exec call warn). When enabled but the platform mechanism
+# can't be set up (pywin32 missing, setrlimit call fails), shell_exec
+# still runs the command — fails open, not closed — but reports
+# "sandboxed": false in its result so that's never silent.
+SHELL_SANDBOX_ENABLED = os.getenv("FORGE_SHELL_SANDBOX_ENABLED", "true").lower() in ("1", "true", "yes")
+SHELL_CPU_SECONDS = int(os.getenv("FORGE_SHELL_CPU_SECONDS", "30"))
+SHELL_MEM_MB = int(os.getenv("FORGE_SHELL_MEM_MB", "512"))
+SHELL_MAX_PROCS = int(os.getenv("FORGE_SHELL_MAX_PROCS", "32"))
