@@ -88,3 +88,17 @@ SHELL_SANDBOX_ENABLED = os.getenv("FORGE_SHELL_SANDBOX_ENABLED", "true").lower()
 SHELL_CPU_SECONDS = int(os.getenv("FORGE_SHELL_CPU_SECONDS", "30"))
 SHELL_MEM_MB = int(os.getenv("FORGE_SHELL_MEM_MB", "512"))
 SHELL_MAX_PROCS = int(os.getenv("FORGE_SHELL_MAX_PROCS", "32"))
+
+# ── repl_run session cache bound (P0 hardening) ─────────────────────────
+#
+# backend/tools/repl.py previously kept one InteractiveInterpreter per
+# session_id forever — an unbounded dict that only ever grew for the
+# life of the process, since nothing but an explicit session delete
+# (clear_repl) ever removed an entry. Now capped: an LRU eviction once
+# more than REPL_MAX_SESSIONS are cached, plus an idle TTL checked
+# lazily on each repl_run call (no separate background sweep task —
+# see that module for why). Evicted/expired state is simply dropped,
+# same contract as clear_repl today: "persistent in-process REPL" was
+# never meant to be durable storage.
+REPL_MAX_SESSIONS = int(os.getenv("FORGE_REPL_MAX_SESSIONS", "50"))
+REPL_IDLE_TTL_SECONDS = int(os.getenv("FORGE_REPL_IDLE_TTL_SECONDS", "1800"))
