@@ -85,7 +85,7 @@ from backend.db import (
     pop_pending_graph_approval,
     record_thread,
 )
-from backend.llm import get_model
+from backend.llm import ainvoke_with_retry, get_model
 from backend.logging_config import get_logger
 from backend.tools import GATED_TOOLS, TOOL_REGISTRY, TOOLS
 from backend.tools.blackboard import make_blackboard_tool
@@ -231,7 +231,7 @@ def _build_graph(tools: list, tool_registry: dict, checkpointer):
     async def agent_node(state: AgentState) -> dict:
         unlocked = [SKILL_REGISTRY[s] for s in state.get("unlocked_skills", []) if s in SKILL_REGISTRY]
         model = get_model().bind_tools([*tools, *unlocked])
-        ai_message = await model.ainvoke(state["messages"])
+        ai_message = await ainvoke_with_retry(model, state["messages"])
         pending = ai_message.tool_calls if isinstance(ai_message, AIMessage) else []
         return {"messages": [ai_message], "pending_tool_calls": pending}
 

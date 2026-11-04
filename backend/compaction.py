@@ -42,6 +42,7 @@ from langchain_core.messages import HumanMessage
 
 from backend.config import CONTEXT_CHARS_PER_TOKEN, CONTEXT_KEEP_RAW_TURNS, CONTEXT_TOKEN_BUDGET
 from backend.db import get_history, get_session_summary, set_session_summary
+from backend.llm import ainvoke_with_retry
 from backend.logging_config import get_logger
 
 logger = get_logger("compaction")
@@ -75,7 +76,7 @@ async def _summarize(get_model, session_id: str, previous_summary: str | None, c
 
     try:
         model = get_model()
-        result = await model.ainvoke([HumanMessage(content=prompt)])
+        result = await ainvoke_with_retry(model, [HumanMessage(content=prompt)])
         text = result.content if isinstance(result.content, str) else str(result.content)
         text = text.strip()
         return text or None

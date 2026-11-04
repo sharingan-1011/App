@@ -20,5 +20,11 @@ langgraph-checkpoint-sqlite==3.1.3
 # not something pip alone provides.
 playwright>=1.47
 requests>=2.32
-
+# shell_exec sandboxing (backend/tools/_sandbox.py) on Windows hosts —
+# Job Objects are the Windows equivalent of POSIX's resource.setrlimit,
+# which doesn't exist on this platform. Not installed/needed on POSIX,
+# where the stdlib `resource` module is used instead.
 pywin32>=306; sys_platform == "win32"
+# Connection-error retry/backoff for model calls to llama-server
+# (backend/llm.py's ainvoke_with_retry).
+tenacity>=8.2
