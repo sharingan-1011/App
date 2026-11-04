@@ -232,7 +232,47 @@ def _build_graph(tools: list, tool_registry: dict, checkpointer):
         unlocked = [SKILL_REGISTRY[s] for s in state.get("unlocked_skills", []) if s in SKILL_REGISTRY]
         model = get_model().bind_tools([*tools, *unlocked])
         ai_message = await ainvoke_with_retry(model, state["messages"])
-        pending = ai_message.tool_calls if isinstance(ai_message, AIMessage) else []
+
+        valid = ai_message.tool_calls if isinstance(ai_message, AIMessage) else []
+        invalid = ai_message.invalid_tool_calls if isinstance(ai_message, AIMessage) else []
+
+        # Previously: a tool call with genuinely invalid (non-truncated)
+        # JSON arguments landed in `invalid`/invalid_tool_calls and was
+        # silently dropped — pending_tool_calls stayed empty, route_after_agent
+        # sent the graph straight to END, and the turn just ended with no
+        # ToolMessage and no visible error (see README's "Known limitations").
+        # Fixed by folding each invalid call into pending_tool_calls, tagged
+        # "invalid": True, so it goes through the exact same
+        # one-call-per-node-invocation path as every other tool call —
+        # tools_node below special-cases it to synthesize an error
+        # ToolMessage instead of executing anything. No new routing edge,
+        # no bulk message injection here, no risk to the single-call
+        # discipline this module's docstring and tests/test_approval_gate.py
+        # depend on for the approval gate's safety. One known simplification:
+        # invalid calls are appended after all valid ones rather than
+        # interleaved in the model's original order, since LangChain doesn't
+        # reliably preserve a single combined ordering across tool_calls and
+        # invalid_tool_calls across versions — harmless here since each is
+        # still matched to the model's calls purely by tool_call_id, not by
+        # position.
+        pending: list[dict] = [
+            {"id": tc["id"], "name": tc["name"], "args": tc["args"], "invalid": False} for tc in valid
+        ]
+        for bad in invalid:
+            pending.append({
+                "id": bad.get("id") or str(uuid.uuid4()),
+                "name": bad.get("name") or "unknown_tool",
+                "args": {},
+                "invalid": True,
+                "error": bad.get("error"),
+            })
+        if invalid:
+            logger.warning(
+                "model emitted %d invalid tool call(s) this turn (malformed JSON args) — "
+                "synthesizing an error ToolMessage for each instead of silently ending the turn",
+                len(invalid),
+            )
+
         return {"messages": [ai_message], "pending_tool_calls": pending}
 
     async def tools_node(state: AgentState) -> dict:
@@ -240,7 +280,19 @@ def _build_graph(tools: list, tool_registry: dict, checkpointer):
         if not pending:
             return {}
         tc, *rest = pending
-        call_id, name, args = tc["id"], tc["name"], tc["args"]
+        call_id, name, args = tc["id"], tc["name"], tc.get("args") or {}
+
+        if tc.get("invalid"):
+            error_detail = tc.get("error") or "arguments were not valid JSON"
+            output = json.dumps({
+                "ok": False,
+                "error": (
+                    f"Your call to '{name}' had malformed arguments and could not be "
+                    f"executed ({error_detail}). Re-emit this tool call with syntactically valid JSON arguments."
+                ),
+            })
+            tm = ToolMessage(content=output, tool_call_id=call_id, name=name)
+            return {"messages": [tm], "pending_tool_calls": rest}
 
         newly_unlocked: list[str] = []
 
@@ -263,7 +315,7 @@ def _build_graph(tools: list, tool_registry: dict, checkpointer):
                     result = await tool.ainvoke(args)
                     output = json.dumps(result, ensure_ascii=False)
                     if name == "search_skills" and isinstance(result, dict):
-                        newly_unlocked = [m["name"] for m in result.get("matches", [])]
+                        newly_unlocked = [match["name"] for match in result.get("matches", [])]
                 except Exception as exc:
                     logger.exception("tool %s (call_id=%s) raised", name, call_id)
                     output = json.dumps({"error": str(exc)})

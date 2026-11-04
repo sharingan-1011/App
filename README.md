@@ -179,11 +179,16 @@ instead).
   recognized and everything after it stays labelled "thinking". Present
   in the original Phase 2 code; preserved as-is through the LangGraph
   migration rather than fixed silently alongside it.
-- A tool call with genuinely invalid (non-truncated) JSON arguments
-  lands in the model response's `invalid_tool_calls` and is silently
-  dropped — no visible error, the turn just ends. Flagged, not patched,
-  since fixing it safely means not breaking the next turn's
-  `tool_call_id` pairing with the upstream API.
+- Fixed: a tool call with genuinely invalid (non-truncated) JSON
+  arguments used to land in the model response's `invalid_tool_calls`
+  and get silently dropped — no visible error, the turn just ended.
+  `agent.py`'s `agent_node` now folds each invalid call into
+  `pending_tool_calls` (tagged `invalid: True`) so it's processed
+  through the same one-call-per-node-invocation path as every other
+  tool call; `tools_node` synthesizes a ToolMessage telling the model
+  its arguments were malformed and to re-emit the call, instead of
+  executing anything. This keeps every tool_call_id paired with a
+  response, which is what made the original fix risky to do carelessly.
 - `computer_action` is a stub (see Tools table) — no real desktop
   control exists yet.
 - `schedule_task` is a one-off "run this prompt at this time" primitive,
