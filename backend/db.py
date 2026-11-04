@@ -139,8 +139,78 @@ async def init_db():
             covered_through_ts REAL NOT NULL,
             updated            REAL NOT NULL
         );
+
+        -- Structured tracing + cost accounting (P1 hardening). One row
+        -- per span: an agent_node (LLM) call, a tools_node (tool)
+        -- execution, or a specialist's own LLM/tool call inside
+        -- spawn_subagent. See backend/metrics.py. input_tokens/
+        -- output_tokens are NULL for tool spans (no token concept
+        -- applies) and for LLM spans where neither real usage data nor
+        -- an estimate could be produced; tokens_estimated distinguishes
+        -- "real usage from the model" (0) from "chars÷4 heuristic" (1)
+        -- so a later query/aggregate never silently mixes exact and
+        -- guessed numbers without knowing which is which.
+        CREATE TABLE IF NOT EXISTS turn_metrics (
+            id             TEXT PRIMARY KEY,
+            session_id     TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+            span_type      TEXT NOT NULL,  -- 'agent_node' | 'tool' | 'subagent_llm' | 'subagent_tool'
+            name           TEXT,            -- tool name / specialist name, where applicable
+            start_ts       REAL NOT NULL,
+            end_ts         REAL NOT NULL,
+            duration_ms    REAL NOT NULL,
+            input_tokens   INTEGER,
+            output_tokens  INTEGER,
+            tokens_estimated INTEGER NOT NULL DEFAULT 0,
+            error          TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_turn_metrics_session ON turn_metrics(session_id);
         """)
         await db.commit()
+
+
+# ── structured tracing + cost accounting ────────────────────────────────
+
+async def record_turn_metric(
+    session_id: str,
+    span_type: str,
+    name: str | None,
+    start_ts: float,
+    end_ts: float,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    tokens_estimated: bool = False,
+    error: str | None = None,
+) -> str:
+    mid = str(uuid.uuid4())
+    async with _connect() as db:
+        await db.execute(
+            """
+            INSERT INTO turn_metrics
+                (id, session_id, span_type, name, start_ts, end_ts, duration_ms,
+                 input_tokens, output_tokens, tokens_estimated, error)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                mid, session_id, span_type, name, start_ts, end_ts,
+                (end_ts - start_ts) * 1000.0,
+                input_tokens, output_tokens, 1 if tokens_estimated else 0, error,
+            ),
+        )
+        await db.commit()
+    return mid
+
+
+async def list_turn_metrics(session_id: str) -> list[dict]:
+    """Not wired to an API endpoint yet (DB-only for this pass) — query
+    forge.db directly, or call this from a script, to inspect a
+    session's spans."""
+    async with _connect() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM turn_metrics WHERE session_id=? ORDER BY start_ts", (session_id,)
+        ) as cur:
+            rows = await cur.fetchall()
+    return [dict(r) for r in rows]
 
 
 # ── context compaction's running summary ────────────────────────────────

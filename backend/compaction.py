@@ -59,7 +59,16 @@ so it should be dense, not padded. Do not add commentary about the act of summar
 {transcript}"""
 
 
-def _chars_to_tokens(n_chars: int) -> int:
+def chars_to_tokens(n_chars: int) -> int:
+    """
+    Shared char÷4 token estimate — also used by backend/metrics.py for
+    turn_metrics rows where the model didn't return real usage data.
+    Not model-accurate (see backend/config.py's CONTEXT_TOKEN_BUDGET
+    comment for why no real tokenizer is used here), but applying the
+    SAME heuristic everywhere this app estimates tokens at least keeps
+    compaction decisions and cost-accounting numbers internally
+    consistent with each other.
+    """
     return max(1, n_chars // CONTEXT_CHARS_PER_TOKEN)
 
 
@@ -119,7 +128,7 @@ async def build_compacted_history(session_id: str, get_model) -> list[dict]:
             await set_session_summary(session_id, new_summary, new_covered_through)
             logger.info(
                 "session %s: compacted %d message(s) into the running summary (raw was ~%d est. tokens, budget %d)",
-                session_id, len(older_chunk), _chars_to_tokens(raw_chars), CONTEXT_TOKEN_BUDGET,
+                session_id, len(older_chunk), chars_to_tokens(raw_chars), CONTEXT_TOKEN_BUDGET,
             )
             summary_text = new_summary
             raw = kept_tail
