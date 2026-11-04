@@ -128,7 +128,46 @@ async def init_db():
             session_id TEXT NOT NULL,
             created    REAL NOT NULL
         );
+
+        -- Context compaction's running, incrementally-updated digest of
+        -- everything older than covered_through_ts (backend/compaction.py).
+        -- One row per session; absence means nothing has been folded
+        -- into a summary yet (every stored message is still raw).
+        CREATE TABLE IF NOT EXISTS session_summary (
+            session_id         TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+            summary_text       TEXT NOT NULL,
+            covered_through_ts REAL NOT NULL,
+            updated            REAL NOT NULL
+        );
         """)
+        await db.commit()
+
+
+# ── context compaction's running summary ────────────────────────────────
+
+async def get_session_summary(session_id: str) -> dict | None:
+    async with _connect() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM session_summary WHERE session_id=?", (session_id,)
+        ) as cur:
+            row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def set_session_summary(session_id: str, summary_text: str, covered_through_ts: float) -> None:
+    async with _connect() as db:
+        await db.execute(
+            """
+            INSERT INTO session_summary (session_id, summary_text, covered_through_ts, updated)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(session_id) DO UPDATE SET
+                summary_text = excluded.summary_text,
+                covered_through_ts = excluded.covered_through_ts,
+                updated = excluded.updated
+            """,
+            (session_id, summary_text, covered_through_ts, time.time()),
+        )
         await db.commit()
 
 

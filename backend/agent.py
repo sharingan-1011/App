@@ -73,6 +73,7 @@ from langgraph.graph.message import add_messages
 from langgraph.types import Command, interrupt
 
 from backend.checkpointer import get_checkpointer
+from backend.compaction import build_compacted_history
 from backend.config import APPROVAL_TIMEOUT_SECONDS
 from backend.db import (
     add_pending_graph_approval,
@@ -434,12 +435,24 @@ async def stream_agent(
     max_iterations: int = 12,
     cancel_event=None,
 ) -> AsyncGenerator[str, None]:
-    """Starts a fresh turn. See module docstring for the approval-gate shape."""
+    """
+    Starts a fresh turn. See module docstring for the approval-gate shape.
+
+    `history` is accepted for signature compatibility with existing
+    callers (main.py's /chat, backend/tools/scheduler.py) but is no
+    longer what builds the prompt: build_compacted_history re-fetches
+    this session's messages itself, WITH timestamps, because deciding
+    what's already been folded into the running summary needs them —
+    get_history_for_llm (what callers pass as `history`) strips them.
+    By the time this runs, the caller has already persisted the new
+    user message, so re-fetching here sees it too.
+    """
     tools, registry, system_prompt = await _build_turn_tools(session_id)
     checkpointer = await get_checkpointer()
     graph = _build_graph(tools, registry, checkpointer)
 
-    messages: list[BaseMessage] = [SystemMessage(content=system_prompt), *convert_to_messages(history)]
+    compacted_history = await build_compacted_history(session_id, get_model)
+    messages: list[BaseMessage] = [SystemMessage(content=system_prompt), *convert_to_messages(compacted_history)]
     thread_id = str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}, "recursion_limit": max_iterations * 2}
 
