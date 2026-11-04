@@ -106,3 +106,23 @@ SHELL_MAX_PROCS = int(os.getenv("FORGE_SHELL_MAX_PROCS", "32"))
 # never meant to be durable storage.
 REPL_MAX_SESSIONS = int(os.getenv("FORGE_REPL_MAX_SESSIONS", "50"))
 REPL_IDLE_TTL_SECONDS = int(os.getenv("FORGE_REPL_IDLE_TTL_SECONDS", "1800"))
+
+# ── context compaction (P1) ──────────────────────────────────────────────
+#
+# backend/compaction.py. CONTEXT_TOKEN_BUDGET is denominated in
+# ESTIMATED tokens via a chars-per-token heuristic, not a real tokenizer
+# count: FORGE's model (Groot-19B-A3B) has no tiktoken-compatible
+# encoder, and tiktoken's own encoders are OpenAI-specific — running one
+# against this model's actual BPE vocabulary would be no more accurate
+# than the heuristic, just slower and with an extra dependency. Default
+# budget is deliberately well under the -c 131072 total context (and
+# under the ~32K/slot a session gets when --parallel 4 splits it, per
+# the README's Kaggle setup) to leave headroom for tool-call schemas,
+# tool outputs, and the model's own response.
+CONTEXT_TOKEN_BUDGET = int(os.getenv("FORGE_CONTEXT_TOKEN_BUDGET", "24000"))
+CONTEXT_CHARS_PER_TOKEN = int(os.getenv("FORGE_CONTEXT_CHARS_PER_TOKEN", "4"))
+# Most recent N stored messages (user+assistant turns, as persisted by
+# backend/db.py's messages table — tool calls/results aren't persisted
+# there, so this is purely chat turns) that stay raw and are never
+# folded into the running summary, however large the session gets.
+CONTEXT_KEEP_RAW_TURNS = int(os.getenv("FORGE_CONTEXT_KEEP_RAW_TURNS", "10"))
