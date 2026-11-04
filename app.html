@@ -31,6 +31,23 @@
 }
 
 html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font-family: var(--font); font-size: 14px; }
+
+/* ── motion system: shared keyframes for the animated-feel pass below ── */
+@keyframes messageIn   { from { opacity: 0; transform: translateY(16px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes cardPop     { 0% { opacity: 0; transform: translateY(6px) scale(.96); } 60% { opacity: 1; transform: translateY(0) scale(1.015); } 100% { transform: scale(1); } }
+@keyframes slideDownFade { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes modalPop    { from { opacity: 0; transform: scale(.93) translateY(10px); } to { opacity: 1; transform: scale(1) translateY(0); } }
+@keyframes gradientShift { 0%, 100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
+@keyframes badgePulse  { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+@keyframes glowPulse   { 0%, 100% { box-shadow: 0 0 0 0 rgba(124,106,247,.4); } 50% { box-shadow: 0 0 10px 2px rgba(124,106,247,0); } }
+@keyframes float       { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+@keyframes spinSlow    { to { transform: rotate(360deg); } }
+@keyframes shimmer     { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+
+button {
+  transition: transform .14s cubic-bezier(.34,1.56,.64,1), background-color .15s ease, box-shadow .18s ease, color .15s ease, border-color .15s ease, opacity .15s ease;
+}
+button:active { transform: scale(.93); }
 /* Visible keyboard focus ring — previously relied entirely on the
    browser default, which several custom interactive elements below
    suppress or never receive because they weren't focusable at all. */
@@ -46,17 +63,20 @@ button:focus-visible, [tabindex]:focus-visible, input:focus-visible, textarea:fo
 #sidebar-header { padding: 16px 14px 10px; display: flex; align-items: center; gap: 8px; }
 #sidebar-header .logo {
   font-size: 18px; font-weight: 700; letter-spacing: -0.5px;
-  background: linear-gradient(135deg, var(--accent), #a78bfa);
+  background: linear-gradient(135deg, var(--accent), #a78bfa, var(--accent));
+  background-size: 200% auto;
   -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  animation: gradientShift 5s ease-in-out infinite;
 }
 #new-chat-btn {
   margin: 6px 10px 10px; padding: 8px 12px;
   background: var(--accent-lo); border: 1px solid rgba(124,106,247,.3);
   border-radius: var(--radius); color: var(--accent);
   cursor: pointer; font-size: 13px; font-weight: 500;
-  display: flex; align-items: center; gap: 6px; transition: background .15s;
+  display: flex; align-items: center; gap: 6px; transition: background .15s, transform .15s cubic-bezier(.34,1.56,.64,1), box-shadow .15s;
 }
-#new-chat-btn:hover { background: rgba(124,106,247,.22); }
+#new-chat-btn:hover { background: rgba(124,106,247,.22); transform: translateY(-1px); box-shadow: 0 2px 10px rgba(124,106,247,.25); }
+#new-chat-btn:active { transform: scale(.95); }
 #session-list { flex: 1; overflow-y: auto; padding: 0 6px 12px; }
 #session-list::-webkit-scrollbar { width: 4px; }
 #session-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
@@ -64,9 +84,15 @@ button:focus-visible, [tabindex]:focus-visible, input:focus-visible, textarea:fo
   padding: 8px 10px; border-radius: 8px; cursor: pointer;
   display: flex; align-items: center; gap: 6px;
   color: var(--muted); font-size: 13px;
-  transition: background .12s, color .12s; position: relative;
+  transition: background .12s, color .12s, transform .15s ease; position: relative;
+  animation: slideDownFade .25s cubic-bezier(.16,1,.3,1) both;
 }
-.session-item:hover, .session-item.active { background: var(--surface2); color: var(--text); }
+.session-item:hover { background: var(--surface2); color: var(--text); transform: translateX(3px); }
+.session-item.active { background: var(--surface2); color: var(--text); }
+.session-item.active::before {
+  content: ''; position: absolute; left: -6px; top: 50%; transform: translateY(-50%);
+  width: 3px; height: 60%; border-radius: 2px; background: var(--accent);
+}
 .session-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-item input.rename-input {
   flex: 1; background: transparent; border: none;
@@ -95,6 +121,8 @@ button:focus-visible, [tabindex]:focus-visible, input:focus-visible, textarea:fo
 #messages::-webkit-scrollbar { width: 5px; }
 #messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 .msg-row { max-width: 820px; margin: 0 auto 28px; padding: 0 24px; }
+.msg-enter { animation: messageIn .4s cubic-bezier(.16,1,.3,1) both; }
+.card-pop   { animation: cardPop .35s cubic-bezier(.34,1.56,.64,1) both; }
 .msg-row.user .bubble {
   background: var(--user-bg); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 12px 16px;
@@ -138,12 +166,13 @@ button:focus-visible, [tabindex]:focus-visible, input:focus-visible, textarea:fo
 .thinking-header svg { flex-shrink: 0; transition: transform .2s; }
 .thinking-block.open .thinking-header svg { transform: rotate(90deg); }
 .thinking-body {
-  display: none; padding: 10px 12px;
+  max-height: 0; padding: 0 12px;
   font-size: 12px; color: var(--muted); font-family: var(--mono);
   white-space: pre-wrap; line-height: 1.5;
-  border-top: 1px solid var(--border); max-height: 240px; overflow-y: auto;
+  border-top: 0px solid var(--border); overflow-y: auto;
+  transition: max-height .3s cubic-bezier(.16,1,.3,1), padding .25s ease, border-top-width .25s ease;
 }
-.thinking-block.open .thinking-body { display: block; }
+.thinking-block.open .thinking-body { display: block; max-height: 240px; padding: 10px 12px; border-top-width: 1px; }
 .tool-card { margin: 8px 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--tool-bg); }
 .tool-header {
   display: flex; align-items: center; gap: 8px; cursor: pointer;
@@ -153,11 +182,11 @@ button:focus-visible, [tabindex]:focus-visible, input:focus-visible, textarea:fo
 .tool-header svg { flex-shrink: 0; transition: transform .2s; }
 .tool-card.open .tool-header svg { transform: rotate(90deg); }
 .tool-badge { font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 3px; letter-spacing: .04em; }
-.tool-badge.running { background: rgba(210,153,34,.15); color: var(--yellow); }
+.tool-badge.running { background: rgba(210,153,34,.15); color: var(--yellow); animation: badgePulse 1.2s ease-in-out infinite; }
 .tool-badge.ok      { background: rgba(63,185,80,.12);  color: var(--green); }
 .tool-badge.err     { background: rgba(248,81,73,.12);  color: var(--red); }
-.tool-body { display: none; }
-.tool-card.open .tool-body { display: block; }
+.tool-body { max-height: 0; overflow: hidden; transition: max-height .3s cubic-bezier(.16,1,.3,1); }
+.tool-card.open .tool-body { display: block; max-height: 640px; }
 .tool-section { padding: 8px 12px; border-top: 1px solid var(--border); }
 .tool-section .label { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 4px; }
 .tool-section pre { font-family: var(--mono); font-size: 12px; color: var(--text); white-space: pre-wrap; word-break: break-word; max-height: 300px; overflow-y: auto; }
@@ -176,27 +205,28 @@ button:focus-visible, [tabindex]:focus-visible, input:focus-visible, textarea:fo
 .tool-output-shell .exit-badge.err { color: var(--red);   background: rgba(248,81,73,.1); }
 .tool-output-file pre { font-family: var(--mono); font-size: 12px; background: var(--surface2); padding: 10px; border-radius: 6px; max-height: 240px; overflow-y: auto; white-space: pre-wrap; }
 #empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--muted); gap: 12px; }
-#empty .big { font-size: 36px; }
+#empty .big { font-size: 36px; animation: float 3s ease-in-out infinite; display: inline-block; }
 #empty .tagline { font-size: 15px; }
-.cursor { display: inline-block; width: 2px; height: 1em; background: var(--text); vertical-align: text-bottom; animation: blink .9s step-end infinite; }
+.cursor { display: inline-block; width: 2px; height: 1em; background: var(--accent); box-shadow: 0 0 6px rgba(124,106,247,.7); vertical-align: text-bottom; animation: blink .9s step-end infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 #input-area { padding: 14px 20px; border-top: 1px solid var(--border); background: var(--surface); }
 #attach-bar {
-  display: none; margin-bottom: 8px; padding: 6px 10px;
-  background: var(--surface2); border: 1px solid var(--border);
-  border-radius: 8px; font-size: 12px; color: var(--muted);
+  display: flex; margin-bottom: 0; padding: 0 10px; max-height: 0; overflow: hidden;
+  background: var(--surface2); border: 1px solid transparent;
+  border-radius: 8px; font-size: 12px; color: var(--muted); opacity: 0;
   align-items: center; gap: 8px;
+  transition: max-height .22s cubic-bezier(.16,1,.3,1), opacity .18s ease, margin-bottom .22s ease, padding .22s ease, border-color .18s ease;
 }
-#attach-bar.visible { display: flex; }
+#attach-bar.visible { max-height: 40px; opacity: 1; margin-bottom: 8px; padding: 6px 10px; border-color: var(--border); }
 #attach-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #attach-clear { cursor: pointer; color: var(--red); font-size: 14px; line-height: 1; }
 #input-row { display: flex; gap: 8px; align-items: flex-end; }
 #input-wrap {
   flex: 1; background: var(--surface2); border: 1px solid var(--border);
   border-radius: var(--radius); display: flex; align-items: flex-end;
-  transition: border-color .15s;
+  transition: border-color .15s, box-shadow .2s;
 }
-#input-wrap:focus-within { border-color: var(--accent); }
+#input-wrap:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(124,106,247,.12); }
 #msg-input {
   flex: 1; background: none; border: none; outline: none;
   color: var(--text); font-family: var(--font); font-size: 14px;
@@ -204,19 +234,19 @@ button:focus-visible, [tabindex]:focus-visible, input:focus-visible, textarea:fo
   line-height: 1.5; min-height: 44px;
 }
 #msg-input::placeholder { color: var(--muted); }
-#attach-btn { padding: 10px; background: none; border: none; cursor: pointer; color: var(--muted); transition: color .15s; flex-shrink: 0; align-self: flex-end; }
-#attach-btn:hover { color: var(--text); }
+#attach-btn { padding: 10px; background: none; border: none; cursor: pointer; color: var(--muted); transition: color .15s, transform .15s; flex-shrink: 0; align-self: flex-end; }
+#attach-btn:hover { color: var(--text); transform: scale(1.12) rotate(-8deg); }
 #file-input { display: none; }
 #send-btn, #stop-btn {
   width: 40px; height: 40px; border-radius: 8px; border: none; cursor: pointer;
   flex-shrink: 0; display: flex; align-items: center; justify-content: center;
-  font-size: 16px; transition: background .15s, opacity .15s;
+  font-size: 16px; transition: background .15s, opacity .15s, transform .15s cubic-bezier(.34,1.56,.64,1), box-shadow .15s;
 }
 #send-btn { background: var(--accent); color: #fff; }
-#send-btn:hover { background: #6b59e0; }
-#send-btn:disabled { opacity: .4; cursor: default; }
+#send-btn:hover { background: #6b59e0; transform: translateY(-1px) scale(1.05); box-shadow: 0 4px 14px rgba(124,106,247,.35); }
+#send-btn:disabled { opacity: .4; cursor: default; transform: none; box-shadow: none; }
 #stop-btn { background: rgba(248,81,73,.15); color: var(--red); border: 1px solid rgba(248,81,73,.3); display: none; }
-#stop-btn:hover { background: rgba(248,81,73,.3); }
+#stop-btn:hover { background: rgba(248,81,73,.3); transform: translateY(-1px) scale(1.05); }
 #hint { text-align: center; margin-top: 8px; font-size: 11px; color: var(--muted); }
 
 /* ── subagent deployment: new-chat picker, topbar badge, nested cards, blackboard ── */
@@ -229,14 +259,19 @@ button:focus-visible, [tabindex]:focus-visible, input:focus-visible, textarea:fo
 .dot-Ce-58 { background: #a78bfa; }
 
 #modal-overlay {
-  display: none; position: fixed; inset: 0; background: rgba(0,0,0,.6);
+  display: flex; position: fixed; inset: 0; background: rgba(0,0,0,.6);
   align-items: center; justify-content: center; z-index: 100;
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transition: opacity .2s ease, visibility .2s ease;
 }
-#modal-overlay.visible { display: flex; }
+#modal-overlay.visible { opacity: 1; visibility: visible; pointer-events: auto; }
 #new-chat-modal {
   width: 440px; background: var(--surface); border: 1px solid var(--border);
   border-radius: 14px; padding: 22px 24px;
+  transform: scale(.93) translateY(10px); opacity: 0;
+  transition: transform .25s cubic-bezier(.34,1.56,.64,1), opacity .22s ease;
 }
+#modal-overlay.visible #new-chat-modal { transform: scale(1) translateY(0); opacity: 1; }
 #new-chat-modal h2 { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
 #new-chat-modal .sub { font-size: 11.5px; color: var(--muted); margin-bottom: 16px; line-height: 1.5; }
 .mode-option { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; cursor: pointer; }
@@ -258,7 +293,7 @@ button:focus-visible, [tabindex]:focus-visible, input:focus-visible, textarea:fo
   font-size: 10.5px; font-weight: 700; border-radius: 6px; padding: 3px 8px;
   border: 1px solid var(--border); color: var(--muted); display: none; align-items: center; gap: 6px;
 }
-#deploy-badge.visible { display: inline-flex; }
+#deploy-badge.visible { display: inline-flex; animation: cardPop .3s cubic-bezier(.34,1.56,.64,1) both; }
 #deploy-badge.deployed { color: var(--accent); background: var(--accent-lo); border-color: rgba(124,106,247,.3); }
 
 #blackboard-toggle {
@@ -266,24 +301,24 @@ button:focus-visible, [tabindex]:focus-visible, input:focus-visible, textarea:fo
   color: var(--yellow); cursor: pointer; padding: 6px 10px; font-size: 11.5px; font-weight: 600;
   display: flex; align-items: center; gap: 6px; display: none;
 }
-#blackboard-toggle.visible { display: flex; }
+#blackboard-toggle.visible { display: flex; animation: slideDownFade .25s ease both; }
 #blackboard-unread {
   background: var(--yellow); color: #1a1200; font-size: 10px; font-weight: 700;
   border-radius: 9px; padding: 0 6px; display: none;
 }
-#blackboard-unread.visible { display: inline-block; }
+#blackboard-unread.visible { display: inline-block; animation: cardPop .3s cubic-bezier(.34,1.56,.64,1) both; }
 
 #blackboard-drawer {
   position: absolute; top: 0; right: -320px; width: 300px; height: 100%;
   background: var(--surface); border-left: 1px solid var(--border);
-  display: flex; flex-direction: column; transition: right .18s; z-index: 50;
+  display: flex; flex-direction: column; transition: right .28s cubic-bezier(.16,1,.3,1); z-index: 50;
 }
 #blackboard-drawer.open { right: 0; }
 #blackboard-header { padding: 14px 16px; border-bottom: 1px solid var(--border); }
 #blackboard-header .title { font-weight: 700; font-size: 13px; display: flex; align-items: center; gap: 7px; }
 #blackboard-header .desc { font-size: 11px; color: var(--muted); margin-top: 4px; line-height: 1.4; }
 #blackboard-list { flex: 1; overflow-y: auto; padding: 10px 14px; display: flex; flex-direction: column; gap: 9px; }
-.bb-entry { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 11.5px; }
+.bb-entry { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 11.5px; animation: slideDownFade .25s cubic-bezier(.16,1,.3,1) both; }
 .bb-entry .bb-meta { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
 .bb-entry .bb-author { font-weight: 700; font-size: 11px; }
 .bb-entry .bb-tag { font-size: 9px; border-radius: 4px; padding: 0 5px; border: 1px solid var(--border); }
@@ -358,10 +393,11 @@ button:focus-visible, [tabindex]:focus-visible, input:focus-visible, textarea:fo
 
 /* ── slash-skill picker ──────────────────────────────────────────────── */
 #skill-picker {
-  display: none; margin-bottom: 8px; background: var(--surface2); border: 1px solid var(--border);
-  border-radius: 10px; padding: 6px; max-height: 160px; overflow-y: auto;
+  display: block; margin-bottom: 0; background: var(--surface2); border: 1px solid transparent;
+  border-radius: 10px; padding: 0 6px; max-height: 0; overflow: hidden; opacity: 0;
+  transition: max-height .25s cubic-bezier(.16,1,.3,1), opacity .2s ease, margin-bottom .25s ease, padding .25s ease, border-color .2s ease;
 }
-#skill-picker.visible { display: block; }
+#skill-picker.visible { max-height: 160px; opacity: 1; margin-bottom: 8px; padding: 6px; overflow-y: auto; border-color: var(--border); }
 #skill-picker .sp-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; padding: 4px 8px 2px; }
 .sp-item {
   display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 12.5px;
@@ -386,7 +422,7 @@ button:focus-visible, [tabindex]:focus-visible, input:focus-visible, textarea:fo
   #app { position: relative; }
   #sidebar {
     position: fixed; left: 0; top: 0; height: 100%; z-index: 60;
-    transform: translateX(-100%); transition: transform .18s;
+    transform: translateX(-100%); transition: transform .25s cubic-bezier(.16,1,.3,1);
     box-shadow: 2px 0 12px rgba(0,0,0,.4);
   }
   #sidebar.open { transform: translateX(0); }
@@ -404,6 +440,27 @@ button:focus-visible, [tabindex]:focus-visible, input:focus-visible, textarea:fo
 }
 @media (prefers-reduced-motion: reduce) {
   #sidebar { transition: none; }
+}
+
+/* ── reduced motion: disable every animation/transition this pass added,
+   consolidated here rather than scattered per-rule so there's one place
+   to audit that the "noticeable, animated feel" direction never
+   overrides a user's OS-level motion preference ── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
+  .msg-enter, .card-pop, .session-item, .bb-entry,
+  #deploy-badge.visible, #blackboard-toggle.visible, #blackboard-unread.visible,
+  #sidebar-header .logo, #empty .big, .tool-badge.running {
+    animation: none !important;
+  }
+  .session-item:hover, #new-chat-btn:hover, #send-btn:hover, #stop-btn:hover,
+  #attach-btn:hover, button:active {
+    transform: none !important;
+  }
 }
 </style>
 </head>
@@ -511,13 +568,44 @@ button:focus-visible, [tabindex]:focus-visible, input:focus-visible, textarea:fo
 <script>
 const API = 'http://localhost:8000';
 
-marked.setOptions({
-  breaks: true, gfm: true,
-  highlight: (code, lang) => {
-    if (lang && hljs.getLanguage(lang)) return hljs.highlight(code, { language: lang }).value;
-    return hljs.highlightAuto(code).value;
+// Previously this ran unguarded: if the marked/highlight.js CDN
+// scripts fail to load (offline, blocked, a flaky network), `marked`
+// is undefined here and this throws immediately — which, being a
+// synchronous top-level statement, halts the ENTIRE rest of this
+// script. Every event listener below (new chat, send, approvals,
+// everything) would silently never get registered, with no visible
+// error to the user beyond a dead UI. Wrapped so a CDN failure
+// degrades to plain-text rendering instead of a non-functional page.
+try {
+  marked.setOptions({
+    breaks: true, gfm: true,
+    highlight: (code, lang) => {
+      if (lang && hljs.getLanguage(lang)) return hljs.highlight(code, { language: lang }).value;
+      return hljs.highlightAuto(code).value;
+    }
+  });
+} catch (err) {
+  console.error('marked/highlight.js failed to load — falling back to plain text rendering:', err);
+}
+
+// Used everywhere a message is rendered, instead of calling marked.parse
+// directly, so a CDN failure (marked undefined/misconfigured) degrades to
+// escaped plain text rather than throwing and aborting whatever UI update
+// was in progress.
+function renderMarkdown(text) {
+  try {
+    if (typeof marked !== 'undefined' && marked.parse) return marked.parse(text || '');
+  } catch (err) {
+    console.error('markdown render failed, showing plain text:', err);
   }
-});
+  return `<pre style="white-space:pre-wrap;font-family:var(--font);">${escHtml(text || '')}</pre>`;
+}
+function highlightAllSafe() {
+  try { if (typeof hljs !== 'undefined') hljs.highlightAll(); } catch (err) { console.error(err); }
+}
+function highlightElementSafe(el) {
+  try { if (typeof hljs !== 'undefined') hljs.highlightElement(el); } catch (err) { console.error(err); }
+}
 
 let currentSessionId = null;
 let sessions = [];
@@ -794,19 +882,25 @@ async function loadHistory(sessionId) {
   const data = await res.json();
   if (!data.messages?.length) return;
   emptyEl.style.display = 'none';
-  data.messages.forEach(m => {
-    if (m.role === 'user') appendUserBubble(m.content);
-    else if (m.role === 'assistant') appendAssistantBubble(m.content);
+  // Cascading entrance for history load — stagger per message, capped
+  // so a long conversation doesn't make the last row wait ages to
+  // appear (diminishing returns past ~10 messages' worth of delay).
+  const STAGGER_MS = 35, MAX_DELAY_MS = 350;
+  data.messages.forEach((m, i) => {
+    const delay = Math.min(i * STAGGER_MS, MAX_DELAY_MS);
+    if (m.role === 'user') appendUserBubble(m.content, null, delay);
+    else if (m.role === 'assistant') appendAssistantBubble(m.content, delay);
   });
   scrollBottom();
 }
 
 newChatBtn.addEventListener('click', openNewChatModal);
 
-function appendUserBubble(text, attachInfo) {
+function appendUserBubble(text, attachInfo, entranceDelayMs) {
   emptyEl.style.display = 'none';
   const row    = document.createElement('div');
-  row.className = 'msg-row user';
+  row.className = 'msg-row user msg-enter';
+  if (entranceDelayMs) row.style.animationDelay = entranceDelayMs + 'ms';
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
   if (attachInfo) {
@@ -825,13 +919,14 @@ function appendUserBubble(text, attachInfo) {
   return bubble;
 }
 
-function appendAssistantBubble(markdownText) {
+function appendAssistantBubble(markdownText, entranceDelayMs) {
   const row    = document.createElement('div');
-  row.className = 'msg-row assistant';
+  row.className = 'msg-row assistant msg-enter';
+  if (entranceDelayMs) row.style.animationDelay = entranceDelayMs + 'ms';
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
-  bubble.innerHTML = marked.parse(markdownText || '');
-  hljs.highlightAll();
+  bubble.innerHTML = renderMarkdown(markdownText || '');
+  highlightAllSafe();
   row.appendChild(bubble);
   messagesEl.appendChild(row);
   scrollBottom();
@@ -841,7 +936,7 @@ function appendAssistantBubble(markdownText) {
 function createStreamRow() {
   emptyEl.style.display = 'none';
   const row = document.createElement('div');
-  row.className = 'msg-row assistant';
+  row.className = 'msg-row assistant msg-enter';
 
   const thinkBlock = document.createElement('div');
   thinkBlock.className = 'thinking-block';
@@ -878,7 +973,7 @@ function toolTier(name) {
 
 function buildToolCard(callId, name, args) {
   const card = document.createElement('div');
-  card.className = 'tool-card';
+  card.className = 'tool-card card-pop';
   card.id = `tc-${callId}`;
 
   const tier = toolTier(name);
@@ -951,7 +1046,7 @@ function buildSubagentCard(ctx, parentCallId, specialist, task) {
   const host = parent ? parent.body : ctx.bubble.parentElement;
 
   const card = document.createElement('div');
-  card.className = 'subagent-card';
+  card.className = 'subagent-card card-pop';
   card.style.border = '1px solid var(--border)';
   card.innerHTML = `
     <div class="subagent-head">
@@ -994,7 +1089,7 @@ const APPROVAL_WARN_THRESHOLD_SECONDS = 30;
 
 function buildApprovalCard(ctx, ev) {
   const card = document.createElement('div');
-  card.className = 'approval-card';
+  card.className = 'approval-card card-pop';
   card.id = `appr-${ev.call_id}`;
 
   const label = ev.subagent ? `${ev.subagent} wants to run` : 'Needs your approval to run';
@@ -1122,14 +1217,14 @@ function handleEvent(ctx, ev) {
   }
   else if (ev.type === 'delta') {
     ctx.deltaBuf += ev.text;
-    bubble.innerHTML = marked.parse(ctx.deltaBuf);
+    bubble.innerHTML = renderMarkdown(ctx.deltaBuf);
     if (ctx.cursor) bubble.appendChild(ctx.cursor);
     scrollBottom();
   }
   else if (ev.type === 'tool_start') {
     const card = buildToolCard(ev.call_id, ev.name, ev.args || {});
     if (ctx.cursor) ctx.cursor.remove();
-    bubble.innerHTML = marked.parse(ctx.deltaBuf);
+    bubble.innerHTML = renderMarkdown(ctx.deltaBuf);
     row.insertBefore(card, bubble);
     if (ctx.cursor) bubble.appendChild(ctx.cursor);
     ctx.toolCards.set(ev.call_id, { card, body: card.querySelector('.tool-body') });
@@ -1163,7 +1258,7 @@ function handleEvent(ctx, ev) {
     ctx.terminalReceived = true;
     const card = buildApprovalCard(ctx, ev);
     if (ctx.cursor) ctx.cursor.remove();
-    bubble.innerHTML = marked.parse(ctx.deltaBuf);
+    bubble.innerHTML = renderMarkdown(ctx.deltaBuf);
     if (ev.subagent) {
       const parent = ctx.subagentCards.get(ev.parent_call_id + '|' + ev.subagent);
       (parent ? parent.toolsEl : row).appendChild(card);
@@ -1184,7 +1279,7 @@ function handleEvent(ctx, ev) {
   }
   else if (ev.type === 'subagent_delta') {
     const r = ctx.subagentCards.get(ev.parent_call_id + '|' + ev.subagent);
-    if (r) { r.deltaBuf += ev.text; r.textEl.innerHTML = marked.parse(r.deltaBuf); }
+    if (r) { r.deltaBuf += ev.text; r.textEl.innerHTML = renderMarkdown(r.deltaBuf); }
     scrollBottom();
   }
   else if (ev.type === 'subagent_tool_start') {
@@ -1216,8 +1311,8 @@ function handleEvent(ctx, ev) {
   else if (ev.type === 'done') {
     ctx.terminalReceived = true;
     if (ctx.cursor) ctx.cursor.remove();
-    bubble.innerHTML = marked.parse(ctx.deltaBuf || '');
-    bubble.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));
+    bubble.innerHTML = renderMarkdown(ctx.deltaBuf || '');
+    bubble.querySelectorAll('pre code').forEach(el => highlightElementSafe(el));
     if (ctx.hasThink) {
       thinkBlock.querySelector('.thinking-header').innerHTML =
         `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg> Thought process`;
@@ -1228,7 +1323,7 @@ function handleEvent(ctx, ev) {
   else if (ev.type === 'cancelled') {
     ctx.terminalReceived = true;
     if (ctx.cursor) ctx.cursor.remove();
-    bubble.innerHTML = marked.parse(ctx.deltaBuf || '');
+    bubble.innerHTML = renderMarkdown(ctx.deltaBuf || '');
     const banner = document.createElement('div');
     banner.className = 'state-banner cancelled';
     banner.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="4" y="4" width="16" height="16" rx="2"/></svg> Stopped before finishing`;
@@ -1324,7 +1419,7 @@ async function send() {
     if (err.name !== 'AbortError') {
       bubble.innerHTML = `<span style="color:var(--red)">⚠ Connection error: ${escHtml(String(err))}</span>`;
     } else {
-      bubble.innerHTML = marked.parse(ctx.deltaBuf || '_(cancelled)_');
+      bubble.innerHTML = renderMarkdown(ctx.deltaBuf || '_(cancelled)_');
     }
   } finally {
     streaming = false;

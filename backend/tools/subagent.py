@@ -58,8 +58,11 @@ from langchain_core.tools import StructuredTool
 from backend.config import APPROVAL_TIMEOUT_SECONDS
 from backend.db import add_blackboard_entry
 from backend.llm import ainvoke_with_retry
+from backend.logging_config import get_logger
 from backend.metrics import record_llm_usage, span
 from backend.tools.blackboard import make_blackboard_tool
+
+logger = get_logger("subagent")
 
 SPECIALIST_TOOL_NAMES: dict[str, list[str]] = {
     "Ba-56": ["shell_exec", "fs_read", "fs_write", "fs_list", "fs_delete", "repl_run", "memory_read"],
@@ -259,6 +262,76 @@ async def _run_specialist(
     return {"ok": True, "specialist": specialist, "result": final_text, "tool_calls_made": tool_call_count}
 
 
+_VERIFY_PROMPT = """\
+A specialist agent ({specialist}) was given this task:
+
+{task}
+
+It returned this result:
+
+{result}
+
+Does the result actually address the task — is it complete, on-topic, and not a \
+refusal/error dressed up as a result? Reply with a first line of EXACTLY "PASS" or \
+"FAIL", then one short sentence explaining why. Nothing else."""
+
+
+async def _verify_specialist_result(specialist: str, task: str, result_text: str, get_model) -> dict:
+    """
+    Verification step (P2 hardening): C137 already sees every
+    specialist's final_text in its own next reasoning turn regardless
+    (it's right there in spawn_subagent's tool_result) and can comment
+    on it — but that's just hoping the model notices a bad result on
+    its own. This is a dedicated, structural check: one extra LLM call
+    per finished specialist task, asking specifically "does this
+    actually address the task", BEFORE the result reaches C137's own
+    turn, with its own pass/fail+note attached to the tool_result
+    rather than silently trusting final_text.
+
+    Best-effort: if the verification call itself fails (e.g. the same
+    connection issue ainvoke_with_retry already covers, exhausted),
+    this returns checked=False rather than passed=False — a
+    verification that couldn't run is not the same as a result that
+    failed verification, and conflating them would make a transient
+    network blip look like a quality problem with the specialist's work.
+    """
+    prompt = _VERIFY_PROMPT.format(specialist=specialist, task=task, result=result_text)
+    try:
+        model = get_model()
+        resp = await ainvoke_with_retry(model, [HumanMessage(content=prompt)])
+        text = (resp.content if isinstance(resp.content, str) else str(resp.content)).strip()
+        first_line = text.splitlines()[0].strip().upper() if text else ""
+        return {"checked": True, "passed": first_line.startswith("PASS"), "note": text}
+    except Exception as exc:
+        logger.exception("verification call failed for specialist %s — skipping verification for this result", specialist)
+        return {"checked": False, "passed": None, "note": f"verification call failed: {exc}"}
+
+
+async def _verify_and_annotate(specialist: str, task: str, result: dict, session_id: str, get_model) -> dict:
+    """
+    Runs _verify_specialist_result against `result` and returns an
+    annotated copy with a "verification" key — unless there's nothing
+    coherent to verify (the task was denied, errored, or the specialist
+    produced no text), in which case `result` is returned unchanged
+    rather than asking the model to pass judgment on a non-result.
+    Posts a blackboard "finding" if verification actually ran and
+    failed, so it's visible the same way any other finding is, without
+    blocking or retrying anything itself — what happens next is C137's
+    call, same as the module's reassignment design already leaves to it.
+    """
+    result_text = result.get("result") if isinstance(result, dict) else None
+    if not isinstance(result, dict) or not result.get("ok") or not isinstance(result_text, str) or not result_text.strip():
+        return result
+
+    verification = await _verify_specialist_result(specialist, task, result_text, get_model)
+    if verification.get("checked") and verification.get("passed") is False:
+        await _post_blackboard(
+            session_id, "C137", "finding",
+            f"{specialist}'s result did not pass verification: {verification.get('note')}",
+        )
+    return {**result, "verification": verification}
+
+
 def make_spawn_subagent_tool(
     session_id: str,
     active_specialists: list[str],
@@ -303,9 +376,10 @@ def make_spawn_subagent_tool(
                     f"{specialist}'s task reassigned to {new_specialist} (approval declined).",
                 )
                 follow_up = await _run_specialist(new_specialist, result["task"], session_id, batch_id, tool_registry, get_model, gated_tools)
+                follow_up = await _verify_and_annotate(new_specialist, result["task"], follow_up, session_id, get_model)
                 out[f"{specialist}→{new_specialist}"] = follow_up
             else:
-                out[specialist] = result
+                out[specialist] = await _verify_and_annotate(specialist, task_text, result, session_id, get_model)
 
         return out
 
