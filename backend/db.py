@@ -111,8 +111,77 @@ async def init_db():
             session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
             created    REAL NOT NULL
         );
+
+        -- Durable index for the C137-level approval gate: call_id ->
+        -- which checkpointed thread to resume. The actual paused graph
+        -- state already lives durably in checkpoints.db (AsyncSqliteSaver) —
+        -- this table is only the lookup /approve needs to find it, so a
+        -- server restart doesn't orphan an approval that's otherwise
+        -- perfectly resumable. Deliberately NOT used for
+        -- PENDING_SPECIALIST_APPROVALS or cancel_event (backend/agent.py,
+        -- backend/tools/subagent.py) — those are tied to a live coroutine
+        -- or an open connection in the now-dead process, so there is
+        -- nothing a restart could actually recover for them.
+        CREATE TABLE IF NOT EXISTS pending_graph_approvals (
+            call_id    TEXT PRIMARY KEY,
+            thread_id  TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            created    REAL NOT NULL
+        );
         """)
         await db.commit()
+
+
+# ── C137-level approval gate index (restart-durable) ────────────────────
+
+async def add_pending_graph_approval(call_id: str, thread_id: str, session_id: str) -> None:
+    async with _connect() as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO pending_graph_approvals (call_id, thread_id, session_id, created) VALUES (?,?,?,?)",
+            (call_id, thread_id, session_id, time.time()),
+        )
+        await db.commit()
+
+
+async def get_pending_graph_approval(call_id: str) -> dict | None:
+    async with _connect() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM pending_graph_approvals WHERE call_id=?", (call_id,)
+        ) as cur:
+            row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def pop_pending_graph_approval(call_id: str) -> dict | None:
+    """Atomically reads then removes one entry — used by POST /approve so
+    a call_id can only ever be resolved once."""
+    async with _connect() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM pending_graph_approvals WHERE call_id=?", (call_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        if row is not None:
+            await db.execute("DELETE FROM pending_graph_approvals WHERE call_id=?", (call_id,))
+            await db.commit()
+    return dict(row) if row else None
+
+
+async def delete_pending_graph_approval(call_id: str) -> None:
+    async with _connect() as db:
+        await db.execute("DELETE FROM pending_graph_approvals WHERE call_id=?", (call_id,))
+        await db.commit()
+
+
+async def list_pending_graph_approvals() -> list[dict]:
+    """Used once at startup to re-arm approvals left pending by a
+    previous process (backend/agent.py's rearm_pending_approvals)."""
+    async with _connect() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM pending_graph_approvals") as cur:
+            rows = await cur.fetchall()
+    return [dict(r) for r in rows]
 
 
 async def create_session(title: str = "New Chat") -> dict:
