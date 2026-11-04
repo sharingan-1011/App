@@ -7,13 +7,14 @@ Approval gate + subagent deployment additions
   active_specialists}, persisted once and locked for that session's
   whole life (backend/db.py's session_config table).
 - POST /sessions/{id}/approve resolves a pending gated-tool call,
-  either a C137-level one (backend/agent.py's PENDING_GRAPH_APPROVALS —
-  resumes the LangGraph checkpoint, returns a FRESH StreamingResponse
-  continuing the same SSE contract) or a specialist-originated one
-  (backend/tools/subagent.py's PENDING_SPECIALIST_APPROVALS — just
-  resolves an in-process asyncio.Event; the original /chat connection
-  is still open and will pick the result up on its own, so this
-  returns a plain JSON ack instead of a new stream).
+  either a C137-level one (backend/db.py's pending_graph_approvals
+  table, restart-durable — resumes the LangGraph checkpoint, returns a
+  FRESH StreamingResponse continuing the same SSE contract) or a
+  specialist-originated one (backend/tools/subagent.py's
+  PENDING_SPECIALIST_APPROVALS, in-process only — just resolves an
+  asyncio.Event; the original /chat connection is still open and will
+  pick the result up on its own, so this returns a plain JSON ack
+  instead of a new stream).
 - GET /sessions/{id}/config and GET /sessions/{id}/blackboard let the
   frontend load the deploy-picker state and the blackboard's history
   on page load, since SSE only pushes NEW events during an active turn.
@@ -31,7 +32,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
-from backend.agent import PENDING_GRAPH_APPROVALS, resume_agent, stream_agent
+from backend.agent import rearm_pending_approvals, resume_agent, stream_agent
 from backend.checkpointer import close_checkpointer, get_checkpointer, prune_old_checkpoints
 from backend.config import API_AUTH_KEY, CORS_ALLOWED_ORIGINS
 from backend.db import (
@@ -45,6 +46,7 @@ from backend.db import (
     init_db,
     list_scheduled_tasks,
     list_sessions,
+    pop_pending_graph_approval,
     set_session_config,
     update_session_title,
 )
@@ -76,6 +78,9 @@ async def lifespan(app: FastAPI):
     logger.info("FORGE starting up")
     await init_db()
     await get_checkpointer()  # warm the approval-gate checkpointer once at startup
+    rearmed = await rearm_pending_approvals()
+    if rearmed:
+        logger.info("re-armed %d pending graph approval(s) left over from a previous run", rearmed)
     scheduler_task = asyncio.create_task(run_scheduler_loop(stream_agent))
     prune_task = asyncio.create_task(_run_prune_loop())
     logger.info("FORGE ready")
@@ -289,7 +294,11 @@ async def approve(req: Request, session_id: str, body: ApproveRequest = Body(...
     # 2) A C137-level gated call — resume the checkpointed graph. That
     #    original connection already closed when the interrupt paused
     #    it, so this returns a FRESH SSE stream continuing the turn.
-    graph_pending = PENDING_GRAPH_APPROVALS.pop(body.call_id, None)
+    #    pop_pending_graph_approval reads+deletes the DB row directly
+    #    (the source of truth — see backend/agent.py's module docstring),
+    #    so this resolves correctly even if a restart happened between
+    #    the pause and this call and the in-memory cache started empty.
+    graph_pending = await pop_pending_graph_approval(body.call_id)
     if graph_pending is not None:
         if body.decision == "reassign":
             # Reassignment only makes sense for a specialist's task;

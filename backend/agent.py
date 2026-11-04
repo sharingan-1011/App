@@ -32,6 +32,31 @@ A SPECIALIST's gated call (inside spawn_subagent, backend/tools/
 subagent.py) uses a separate, simpler asyncio.Event-based pause — see
 that module's docstring for why nesting a second checkpointed
 interrupt there was deliberately avoided.
+
+Restart durability (P0 hardening) — why only this gate's index moved to the DB
+──────────────────────────────────────────────────────────────────────
+A C137-level pause is genuinely resumable after a restart: the actual
+paused graph state already lives durably in checkpoints.db
+(AsyncSqliteSaver). The only thing that previously lived ONLY in
+process memory — and so orphaned every such pending approval on a
+restart — was the call_id → thread_id index this module used to keep
+in a plain dict. That index now lives entirely in backend/db.py's
+pending_graph_approvals table (there is deliberately no in-memory
+dict mirroring it anymore: an earlier draft of this kept one as a
+"cache," but nothing on the hot path ever read it for a decision, and
+main.py's approve handler resolves straight from the DB — so the
+dict would only ever have grown, never shrink, since nothing popped
+it on that path; dropped rather than shipped half-wired). On startup,
+rearm_pending_approvals() reloads anything left over from a previous
+process and gives each one a fresh APPROVAL_TIMEOUT_SECONDS window.
+
+PENDING_SPECIALIST_APPROVALS (backend/tools/subagent.py) and this
+module's own cancel_event were deliberately NOT moved to the DB: both
+are tied to a live coroutine or an open SSE connection in what is, by
+definition, the process that just died. There is no checkpoint of a
+specialist's mid-task coroutine anywhere, so persisting that dict's
+metadata couldn't let anything be resumed — only recorded as orphaned.
+That's a real feature, just a different one, and out of scope here.
 """
 from __future__ import annotations
 
@@ -49,7 +74,16 @@ from langgraph.types import Command, interrupt
 
 from backend.checkpointer import get_checkpointer
 from backend.config import APPROVAL_TIMEOUT_SECONDS
-from backend.db import append_message, get_session_config, record_thread
+from backend.db import (
+    add_pending_graph_approval,
+    append_message,
+    delete_pending_graph_approval,
+    get_pending_graph_approval,
+    get_session_config,
+    list_pending_graph_approvals,
+    pop_pending_graph_approval,
+    record_thread,
+)
 from backend.llm import get_model
 from backend.logging_config import get_logger
 from backend.tools import GATED_TOOLS, TOOL_REGISTRY, TOOLS
@@ -86,13 +120,6 @@ more than one. If no active specialist's scope fits a task, handle it
 yourself directly with your own full toolset rather than forcing a bad
 match or blocking.
 """
-
-# Pending C137-level graph interrupts, by call_id. Populated when this
-# module's stream_agent/resume_agent detects a paused graph; consumed
-# by main.py's POST /sessions/{id}/approve. In-memory, lost on restart —
-# same tradeoff as cancel_event elsewhere in this app.
-PENDING_GRAPH_APPROVALS: dict[str, dict] = {}
-
 
 # ── incremental <think> tag parser ────────────────────────────────────────────
 # Kept verbatim from the pre-approval-gate implementation — do not change
@@ -328,7 +355,7 @@ async def _consume(graph, run_input, config, cancel_event, session_id: str) -> A
             interrupt_value = state.tasks[0].interrupts[0].value
             thread_id = config["configurable"]["thread_id"]
             call_id = interrupt_value["call_id"]
-            PENDING_GRAPH_APPROVALS[call_id] = {"thread_id": thread_id, "session_id": session_id}
+            await add_pending_graph_approval(call_id, thread_id, session_id)
             asyncio.create_task(_auto_deny_after_timeout(call_id, thread_id, session_id))
             yield sse({"type": "approval_required", **interrupt_value})
         else:
@@ -345,7 +372,8 @@ async def _consume(graph, run_input, config, cancel_event, session_id: str) -> A
 
 async def _auto_deny_after_timeout(call_id: str, thread_id: str, session_id: str) -> None:
     """
-    Scheduled the moment a C137-level gated call pauses the graph.
+    Scheduled the moment a C137-level gated call pauses the graph (or,
+    after a restart, re-armed fresh by rearm_pending_approvals below).
     If nobody resolves it via POST /sessions/{id}/approve within
     APPROVAL_TIMEOUT_SECONDS, resumes it with a deny itself and
     persists the resulting turn straight to the DB — the original
@@ -353,9 +381,13 @@ async def _auto_deny_after_timeout(call_id: str, thread_id: str, session_id: str
     to forward this through.
     """
     await asyncio.sleep(APPROVAL_TIMEOUT_SECONDS)
-    if call_id not in PENDING_GRAPH_APPROVALS:
+    # The DB row is the only source of truth — a real approve/deny via
+    # main.py's pop_pending_graph_approval removes it directly, possibly
+    # from a different process than the one that scheduled this
+    # timeout, if a restart happened in between.
+    if await get_pending_graph_approval(call_id) is None:
         return  # already resolved by a real approve/deny
-    PENDING_GRAPH_APPROVALS.pop(call_id, None)
+    await delete_pending_graph_approval(call_id)
 
     parts: list[str] = []
     async for chunk in resume_agent(session_id, thread_id, {"decision": "deny", "reason": "timeout"}):
@@ -369,6 +401,29 @@ async def _auto_deny_after_timeout(call_id: str, thread_id: str, session_id: str
     full_response = "".join(parts)
     if full_response.strip():
         await append_message(session_id, "assistant", full_response)
+
+
+async def rearm_pending_approvals() -> int:
+    """
+    Called once from main.py's FastAPI lifespan, after get_checkpointer()
+    warms up and before the server starts accepting requests. Reloads
+    any pending_graph_approvals rows left behind by a previous process
+    (i.e. the server was restarted while a C137-level gated call was
+    awaiting approval) and gives each one a FRESH APPROVAL_TIMEOUT_SECONDS
+    window — chosen over resuming the original window's remaining time,
+    since there's no reliable way to tell a user "you have 40 seconds
+    left" across a restart they weren't necessarily watching for.
+
+    The checkpointed graph state for each thread_id is untouched by any
+    of this — it's still sitting in checkpoints.db exactly as it was,
+    which is what makes this safe to re-arm rather than just re-deny.
+    """
+    rows = await list_pending_graph_approvals()
+    for row in rows:
+        call_id, thread_id, session_id = row["call_id"], row["thread_id"], row["session_id"]
+        asyncio.create_task(_auto_deny_after_timeout(call_id, thread_id, session_id))
+        logger.info("re-armed pending graph approval %s (session %s) after restart", call_id, session_id)
+    return len(rows)
 
 
 # ── public entry points ──────────────────────────────────────────────────────

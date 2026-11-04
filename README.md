@@ -163,9 +163,16 @@ instead).
 
 ## Known limitations
 
-- Approval/cancellation state (`PENDING_GRAPH_APPROVALS`,
-  `PENDING_SPECIALIST_APPROVALS`, `cancel_event`) is in-process memory —
-  lost on a server restart.
+- A C137-level gated call's approval now survives a server restart —
+  its call_id → thread_id index lives in `forge.db`'s
+  `pending_graph_approvals` table (not just in process memory), and
+  `rearm_pending_approvals()` reloads anything left pending on startup
+  with a fresh approval-timeout window. `PENDING_SPECIALIST_APPROVALS`
+  and `cancel_event` are still in-process-only and still lost on
+  restart — deliberately: both are tied to a live coroutine or an open
+  connection in the process that just died, so there's no checkpoint
+  for either to resume from (see `backend/agent.py`'s module
+  docstring).
 - `_ThinkParser`'s closing-tag match has a pre-existing off-by-one bug:
   its accumulate loop caps at 7 characters in both branches, one short
   of the 8 needed to match `</think>`, so the closing tag is never

@@ -17,10 +17,14 @@ DB_PATH         = os.getenv("FORGE_DB_PATH",  "forge.db")
 BIND_HOST = os.getenv("FORGE_BIND_HOST", "127.0.0.1")
 BIND_PORT = int(os.getenv("FORGE_BIND_PORT", "8000"))
 
-# Disable uvicorn's --reload by default: a file-watcher restart silently
-# drops PENDING_GRAPH_APPROVALS / PENDING_SPECIALIST_APPROVALS / any live
-# cancel_event, orphaning in-flight approvals and turns with no operator
-# warning. Opt in explicitly for local development.
+# Disable uvicorn's --reload by default: a file-watcher restart still
+# drops PENDING_SPECIALIST_APPROVALS and any live cancel_event (both
+# genuinely in-process-only — see backend/agent.py's module docstring),
+# orphaning in-flight specialist approvals/turns with no operator
+# warning. C137-level graph approvals now survive a restart via
+# backend/db.py's pending_graph_approvals table + rearm_pending_approvals,
+# but that's a reason to restart deliberately, not casually via a
+# file-watcher mid-edit. Opt in explicitly for local development.
 DEV_RELOAD = os.getenv("FORGE_DEV_RELOAD", "false").lower() in ("1", "true", "yes")
 
 # Locked-down CORS: previously allow_origins=["*"] with any
