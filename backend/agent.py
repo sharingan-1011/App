@@ -88,6 +88,7 @@ from backend.db import (
 from backend.llm import ainvoke_with_retry, get_model
 from backend.logging_config import get_logger
 from backend.metrics import record_llm_usage, span
+from backend.tool_selection import select_relevant_tools
 from backend.tools import GATED_TOOLS, TOOL_REGISTRY, TOOLS
 from backend.tools.blackboard import make_blackboard_tool
 from backend.tools.subagent import make_spawn_subagent_tool
@@ -122,6 +123,8 @@ more than one. If no active specialist's scope fits a task, handle it
 yourself directly with your own full toolset rather than forcing a bad
 match or blocking.
 """
+
+
 
 # ── incremental <think> tag parser ────────────────────────────────────────────
 # Kept verbatim from the pre-approval-gate implementation — do not change
@@ -237,10 +240,17 @@ def _build_graph(tools: list, tool_registry: dict, checkpointer, session_id: str
     """
     async def agent_node(state: AgentState) -> dict:
         unlocked = [SKILL_REGISTRY[s] for s in state.get("unlocked_skills", []) if s in SKILL_REGISTRY]
-        model = get_model().bind_tools([*tools, *unlocked])
+        input_text = "\n".join(str(getattr(mm, "content", "") or "") for mm in state["messages"])
+        # select_relevant_tools is a no-op unless FORGE_DYNAMIC_TOOL_BINDING
+        # is set — see backend/tool_selection.py. `unlocked` (Tier-3
+        # skills) is appended AFTER filtering, never filtered itself:
+        # it was already explicitly matched via search_skills, so
+        # re-filtering it here could strip a skill the model just
+        # unlocked moments ago for no good reason.
+        bound_tools = select_relevant_tools(tools, input_text) + unlocked
+        model = get_model().bind_tools(bound_tools)
         async with span(session_id, "agent_node") as m:
             ai_message = await ainvoke_with_retry(model, state["messages"])
-            input_text = "\n".join(str(getattr(mm, "content", "") or "") for mm in state["messages"])
             output_text = ai_message.content if isinstance(ai_message.content, str) else ""
             record_llm_usage(m, ai_message, input_text=input_text, output_text=output_text)
 

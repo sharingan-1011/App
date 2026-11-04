@@ -126,3 +126,18 @@ CONTEXT_CHARS_PER_TOKEN = int(os.getenv("FORGE_CONTEXT_CHARS_PER_TOKEN", "4"))
 # there, so this is purely chat turns) that stay raw and are never
 # folded into the running summary, however large the session gets.
 CONTEXT_KEEP_RAW_TURNS = int(os.getenv("FORGE_CONTEXT_KEEP_RAW_TURNS", "10"))
+
+# ── dynamic tool binding (P2, off by default) ───────────────────────────
+#
+# backend/tool_selection.py. Unlike Tier-3 skills (SKILL_REGISTRY),
+# which have search_skills as an explicit discovery/unlock path, Tier-1
+# tools have NO recovery mechanism if a turn's relevance heuristic
+# wrongly excludes one the model actually needs — it just can't call
+# it that turn, silently. At today's ~12-tool roster this isn't a real
+# problem (the whole point from the original gap analysis was "won't
+# scale past ~30-40 tools without schema bloat"), so this ships
+# disabled: the full roster binds every turn exactly as before unless
+# explicitly turned on. A fixed core of generically-useful/structurally
+# -critical tools (see tool_selection.py's ALWAYS_BOUND_TOOL_NAMES)
+# stays bound even when enabled, regardless of the keyword match.
+DYNAMIC_TOOL_BINDING_ENABLED = os.getenv("FORGE_DYNAMIC_TOOL_BINDING", "false").lower() in ("1", "true", "yes")
