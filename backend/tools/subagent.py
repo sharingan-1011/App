@@ -58,6 +58,7 @@ from langchain_core.tools import StructuredTool
 from backend.config import APPROVAL_TIMEOUT_SECONDS
 from backend.db import add_blackboard_entry
 from backend.llm import ainvoke_with_retry
+from backend.metrics import record_llm_usage, span
 from backend.tools.blackboard import make_blackboard_tool
 
 SPECIALIST_TOOL_NAMES: dict[str, list[str]] = {
@@ -169,11 +170,15 @@ async def _run_specialist(
     final_text = ""
 
     for _ in range(MAX_SPECIALIST_ITERATIONS):
-        ai_message: AIMessage = await ainvoke_with_retry(
-            model,
-            messages,
-            config={"tags": [f"subagent:{specialist}"], "metadata": {"subagent": specialist, "parent_call_id": batch_id}},
-        )
+        async with span(session_id, "subagent_llm", specialist) as llm_metrics:
+            ai_message: AIMessage = await ainvoke_with_retry(
+                model,
+                messages,
+                config={"tags": [f"subagent:{specialist}"], "metadata": {"subagent": specialist, "parent_call_id": batch_id}},
+            )
+            input_text = "\n".join(str(getattr(mm, "content", "") or "") for mm in messages)
+            output_text = ai_message.content if isinstance(ai_message.content, str) else ""
+            record_llm_usage(llm_metrics, ai_message, input_text=input_text, output_text=output_text)
         messages.append(ai_message)
         final_text = ai_message.content if isinstance(ai_message.content, str) else final_text
 
@@ -235,11 +240,13 @@ async def _run_specialist(
             if tool is None:
                 output = json.dumps({"error": f"Unknown tool: {name}"})
             else:
-                try:
-                    result = await tool.ainvoke(args)
-                    output = json.dumps(result, ensure_ascii=False)
-                except Exception as exc:
-                    output = json.dumps({"error": str(exc)})
+                async with span(session_id, "subagent_tool", f"{specialist}:{name}") as tool_metrics:
+                    try:
+                        result = await tool.ainvoke(args)
+                        output = json.dumps(result, ensure_ascii=False)
+                    except Exception as exc:
+                        output = json.dumps({"error": str(exc)})
+                        tool_metrics["error"] = str(exc)
 
             await adispatch_custom_event(
                 "subagent_tool_result",

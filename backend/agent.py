@@ -87,6 +87,7 @@ from backend.db import (
 )
 from backend.llm import ainvoke_with_retry, get_model
 from backend.logging_config import get_logger
+from backend.metrics import record_llm_usage, span
 from backend.tools import GATED_TOOLS, TOOL_REGISTRY, TOOLS
 from backend.tools.blackboard import make_blackboard_tool
 from backend.tools.subagent import make_spawn_subagent_tool
@@ -227,11 +228,21 @@ async def _build_turn_tools(session_id: str) -> tuple[list, dict, str]:
     return tools, registry, system_prompt
 
 
-def _build_graph(tools: list, tool_registry: dict, checkpointer):
+def _build_graph(tools: list, tool_registry: dict, checkpointer, session_id: str | None = None):
+    """
+    session_id is optional (default None) purely so
+    tests/test_approval_gate.py's direct calls — which predate this
+    parameter and have no real session — keep working unchanged; see
+    backend/metrics.py's span() docstring for what None actually does.
+    """
     async def agent_node(state: AgentState) -> dict:
         unlocked = [SKILL_REGISTRY[s] for s in state.get("unlocked_skills", []) if s in SKILL_REGISTRY]
         model = get_model().bind_tools([*tools, *unlocked])
-        ai_message = await ainvoke_with_retry(model, state["messages"])
+        async with span(session_id, "agent_node") as m:
+            ai_message = await ainvoke_with_retry(model, state["messages"])
+            input_text = "\n".join(str(getattr(mm, "content", "") or "") for mm in state["messages"])
+            output_text = ai_message.content if isinstance(ai_message.content, str) else ""
+            record_llm_usage(m, ai_message, input_text=input_text, output_text=output_text)
 
         valid = ai_message.tool_calls if isinstance(ai_message, AIMessage) else []
         invalid = ai_message.invalid_tool_calls if isinstance(ai_message, AIMessage) else []
@@ -297,6 +308,15 @@ def _build_graph(tools: list, tool_registry: dict, checkpointer):
         newly_unlocked: list[str] = []
 
         if name in GATED_TOOLS:
+            # Deliberately NOT inside a span() block: interrupt() raises
+            # to pause the graph, and per this module's architecture
+            # note, LangGraph re-runs this whole node function from the
+            # top on resume — so wrapping anything that spans the
+            # interrupt itself would record a bogus "errored" span (the
+            # pause) on every single gated call, every time, plus a
+            # second span for the real post-resume execution. The span
+            # below starts only AFTER a decision exists, so it only ever
+            # covers the one segment that actually runs the tool.
             decision = interrupt({"call_id": call_id, "name": name, "args": args})
         else:
             decision = {"decision": "approve"}
@@ -311,14 +331,16 @@ def _build_graph(tools: list, tool_registry: dict, checkpointer):
             if tool is None:
                 output = json.dumps({"error": f"Unknown tool: {name}"})
             else:
-                try:
-                    result = await tool.ainvoke(args)
-                    output = json.dumps(result, ensure_ascii=False)
-                    if name == "search_skills" and isinstance(result, dict):
-                        newly_unlocked = [match["name"] for match in result.get("matches", [])]
-                except Exception as exc:
-                    logger.exception("tool %s (call_id=%s) raised", name, call_id)
-                    output = json.dumps({"error": str(exc)})
+                async with span(session_id, "tool", name) as tool_metrics:
+                    try:
+                        result = await tool.ainvoke(args)
+                        output = json.dumps(result, ensure_ascii=False)
+                        if name == "search_skills" and isinstance(result, dict):
+                            newly_unlocked = [match["name"] for match in result.get("matches", [])]
+                    except Exception as exc:
+                        logger.exception("tool %s (call_id=%s) raised", name, call_id)
+                        output = json.dumps({"error": str(exc)})
+                        tool_metrics["error"] = str(exc)
             await adispatch_custom_event("tool_result", {"call_id": call_id, "name": name, "output": output})
 
         tm = ToolMessage(content=output, tool_call_id=call_id, name=name)
@@ -501,7 +523,7 @@ async def stream_agent(
     """
     tools, registry, system_prompt = await _build_turn_tools(session_id)
     checkpointer = await get_checkpointer()
-    graph = _build_graph(tools, registry, checkpointer)
+    graph = _build_graph(tools, registry, checkpointer, session_id)
 
     compacted_history = await build_compacted_history(session_id, get_model)
     messages: list[BaseMessage] = [SystemMessage(content=system_prompt), *convert_to_messages(compacted_history)]
@@ -534,7 +556,7 @@ async def resume_agent(
     """
     tools, registry, _system_prompt = await _build_turn_tools(session_id)
     checkpointer = await get_checkpointer()
-    graph = _build_graph(tools, registry, checkpointer)
+    graph = _build_graph(tools, registry, checkpointer, session_id)
 
     config = {"configurable": {"thread_id": thread_id}, "recursion_limit": max_iterations * 2}
 
