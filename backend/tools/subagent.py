@@ -57,6 +57,7 @@ from langchain_core.tools import StructuredTool
 
 from backend.config import APPROVAL_TIMEOUT_SECONDS
 from backend.db import add_blackboard_entry
+from backend.llm import ainvoke_with_retry
 from backend.tools.blackboard import make_blackboard_tool
 
 SPECIALIST_TOOL_NAMES: dict[str, list[str]] = {
@@ -168,7 +169,8 @@ async def _run_specialist(
     final_text = ""
 
     for _ in range(MAX_SPECIALIST_ITERATIONS):
-        ai_message: AIMessage = await model.ainvoke(
+        ai_message: AIMessage = await ainvoke_with_retry(
+            model,
             messages,
             config={"tags": [f"subagent:{specialist}"], "metadata": {"subagent": specialist, "parent_call_id": batch_id}},
         )
